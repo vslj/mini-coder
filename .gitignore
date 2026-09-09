@@ -1,0 +1,15 @@
+# 依赖
+node_modules/
+
+# 环境与密钥 —— 永远不要提交
+.env
+.env.*
+*.key
+
+# 构建产物
+dist/
+build/
+
+# 系统文件
+.DS_Store
+Thumbs.db
