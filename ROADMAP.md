@@ -1,7 +1,7 @@
 # mini-coder 项目状态（ROADMAP）
 
 > **本文件是项目的"记忆源文件"**：所有关键决策、进度、协作规则都记录在这里，并随进展持续更新。换电脑/换助手时，读这一份即可接上下文。
-> 最后更新：2026-09-09
+> 最后更新：2026-09-10
 
 ---
 
@@ -22,7 +22,7 @@
 | 语言 | Node.js + TypeScript | 2026-09-09 |
 | LLM 通道 | provider 抽象层，同时支持 Anthropic 原生协议 + OpenAI 兼容协议（国内模型） | 2026-09-09 |
 | 文档/注释语言 | 全中文 | 2026-09-09 |
-| 实验通道 | DeepSeek API（OpenAI 兼容），模型 `deepseek-v4-pro` | 2026-09-09 |
+| 实验通道 | 小米 MiMo（`api.xiaomimimo.com`，同时提供 OpenAI 兼容 `/v1` + Anthropic 原生 `/anthropic` 双端点），模型 `mimo-v2.5-pro`（2026-09-10 由 DeepSeek 切换） | 2026-09-10 |
 | 前置学习 | 先完成 M1–M6 前置知识学习（见 LEARNING.md），再启动阶段 0 | 2026-09-09 |
 
 **阶段规划（学习完成后执行）：**
@@ -34,7 +34,7 @@
 
 **学习模块进度（详见 LEARNING.md）：**
 - [x] M1 LLM API 本质（总结见 learning/M1-学习总结.md）
-- [ ] M2 工具调用机制（讲义已布置，实验未做）
+- [x] M2 工具调用机制（总结见 learning/M2-学习总结.md，实验脚本在 learning/m2/）
 - [ ] M3 Agent 循环（毕业实验：50 行裸 Agent）
 - [ ] M4 System Prompt
 - [ ] M5 上下文与工程
@@ -56,6 +56,11 @@ mini-coder/
 ├── 说明.md                 # 项目原始简报（与前期 AI 对话整理）
 ├── ROADMAP.md              # 本文件：项目记忆源
 ├── LEARNING.md             # 前置学习课程计划（M1–M6）
+├── .env                    # 本地密钥/通道配置（已 gitignore，绝不入库）
+├── scripts/
+│   └── test-llm.ps1        # M1 手动验证脚本（DeepSeek 通道）
 └── learning/
-    └── M1-学习总结.md       # M1 学习沉淀 + 博客素材库
+    ├── M1-学习总结.md       # M1 学习沉淀 + 博客素材库
+    ├── M2-学习总结.md       # M2 学习沉淀 + 博客素材库
+    └── m2/                  # M2 实验脚本（lib 共用库 / exp1 主线 / exp2、exp3 支线）
 ```

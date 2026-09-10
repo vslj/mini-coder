@@ -124,7 +124,7 @@ loop:
 ## 进度
 
 - [x] M1 LLM API 本质（总结见 [learning/M1-学习总结.md](learning/M1-学习总结.md)）
-- [ ] M2 工具调用机制
+- [x] M2 工具调用机制（总结见 [learning/M2-学习总结.md](learning/M2-学习总结.md)）
 - [ ] M3 Agent 循环（毕业实验）
 - [ ] M4 System Prompt
 - [ ] M5 上下文与工程
