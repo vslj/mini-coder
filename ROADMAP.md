@@ -36,6 +36,7 @@
 - [x] M1 LLM API 本质（总结见 learning/M1-学习总结.md）
 - [x] M2 工具调用机制（总结见 learning/M2-学习总结.md，实验脚本在 learning/m2/）
 - [x] M3 Agent 循环（毕业实验 ✅：learning/m3/agent.mjs，~25 行核心循环的裸 Agent，即 mini-coder 阶段 0/1 原型）
+- [x] M4 System Prompt（总结见 learning/M4-学习总结.md；对照实验脚本 learning/m3/agent2.mjs）
 - [ ] M4 System Prompt
 - [ ] M5 上下文与工程
 - [ ] M6 生态与调研
@@ -45,7 +46,7 @@
 1. **节奏**：学习模块 = 实验 → 检验问答（费曼式，用自己的话答） → 总结归档 → 下一模块；沉淀永远比进度优先，不催进度
 2. **密钥安全**：真实 API key 绝不写进对话/文档/代码；总结引用中一律写成 `sk-xxx`；key 只放 `.env`（已 gitignore）
 3. **每模块产出**一份 `learning/MN-学习总结.md`，含：核心概念、实验原始记录（含真实输出，key 脱敏）、意外发现、博客素材点、检验问答
-4. **NOTES.md 三栏**（待创建）：使用观察 / 踩坑记录 / 同类实现调研——博客素材的主库
+4. **NOTES.md 三栏**（已创建，M4 起）：使用观察 / 踩坑记录 / 同类实现调研——博客素材的主库；使用观察栏日常随手补
 5. git 从第 0 天使用；每阶段打 tag 对应一篇博客
 6. 工程上避免的坑（已踩过）：实验中把 key 原文贴进对话（已作废该 key）；DeepSeek 的 `reasoning_content` 不应回传但服务端宽容忽略——provider 规则差异是抽象层的现实依据
 
@@ -63,7 +64,9 @@ mini-coder/
     ├── M1-学习总结.md       # M1 学习沉淀 + 博客素材库
     ├── M2-学习总结.md       # M2 学习沉淀 + 博客素材库
     ├── M3-学习总结.md       # M3 学习沉淀 + 博客素材库
+    ├── M4-学习总结.md       # M4 学习沉淀 + 博客素材库
     ├── m2/                  # M2 实验脚本（lib 共用库 / exp1 主线 / exp2、exp3 支线）
     └── m3/
-        └── agent.mjs        # 毕业实验：裸 Agent（mini-coder 原型）
+        ├── agent.mjs        # 毕业实验：裸 Agent（mini-coder 原型）
+        └── agent2.mjs       # M4 对照实验：同一 Agent + system prompt
 ```
