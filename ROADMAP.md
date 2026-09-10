@@ -37,6 +37,7 @@
 - [x] M2 工具调用机制（总结见 learning/M2-学习总结.md，实验脚本在 learning/m2/）
 - [x] M3 Agent 循环（毕业实验 ✅：learning/m3/agent.mjs，~25 行核心循环的裸 Agent，即 mini-coder 阶段 0/1 原型）
 - [x] M4 System Prompt（总结见 learning/M4-学习总结.md；对照实验脚本 learning/m3/agent2.mjs）
+- [x] M5 上下文与工程（总结见 learning/M5-学习总结.md；compact.mjs + agent-hardened.mjs）
 - [ ] M4 System Prompt
 - [ ] M5 上下文与工程
 - [ ] M6 生态与调研
@@ -48,7 +49,7 @@
 3. **每模块产出**一份 `learning/MN-学习总结.md`，含：核心概念、实验原始记录（含真实输出，key 脱敏）、意外发现、博客素材点、检验问答
 4. **NOTES.md 三栏**（已创建，M4 起）：使用观察 / 踩坑记录 / 同类实现调研——博客素材的主库；使用观察栏日常随手补
 5. git 从第 0 天使用；每阶段打 tag 对应一篇博客
-6. 工程上避免的坑（已踩过）：实验中把 key 原文贴进对话（已作废该 key）；DeepSeek 的 `reasoning_content` 不应回传但服务端宽容忽略——provider 规则差异是抽象层的现实依据
+6. 工程上避免的坑（已踩过）：实验中把 key 原文贴进对话（已作废该 key）；DeepSeek 的 `reasoning_content` 不应回传但服务端宽容忽略——provider 规则差异是抽象层的现实依据；工具错误原文回传会泄漏本机路径（M5 起已脱敏）；对比实验共享沙盒状态会互相污染
 
 ## 四、仓库结构（当前）
 
@@ -65,8 +66,12 @@ mini-coder/
     ├── M2-学习总结.md       # M2 学习沉淀 + 博客素材库
     ├── M3-学习总结.md       # M3 学习沉淀 + 博客素材库
     ├── M4-学习总结.md       # M4 学习沉淀 + 博客素材库
+    ├── M5-学习总结.md       # M5 学习沉淀 + 博客素材库
     ├── m2/                  # M2 实验脚本（lib 共用库 / exp1 主线 / exp2、exp3 支线）
-    └── m3/
-        ├── agent.mjs        # 毕业实验：裸 Agent（mini-coder 原型）
-        └── agent2.mjs       # M4 对照实验：同一 Agent + system prompt
+    ├── m3/
+    |   ├── agent.mjs        # 毕业实验：裸 Agent（mini-coder 原型）
+    |   └── agent2.mjs       # M4 对照实验：同一 Agent + system prompt
+    └── m5/
+        ├── compact.mjs          # M5：成本曲线 + 手动 /compact
+        └── agent-hardened.mjs   # M5：三道防线（重试退避/权限分级/中断存档）
 ```

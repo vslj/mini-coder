@@ -1,0 +1,44 @@
+[
+  {
+    "role": "user",
+    "content": "读 backup.txt，创建 archive.txt 写入'归档完成：'+backup 内容"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_78533c4bb4e74e0186f41b65",
+        "function": {
+          "arguments": "{\"path\": \"backup.txt\"}",
+          "name": "read_file"
+        },
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_78533c4bb4e74e0186f41b65",
+    "content": "{\"content\":\"M5 加固测试\"}"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_874eceba3f5d4624a7026b7c",
+        "function": {
+          "arguments": "{\"path\": \"archive.txt\", \"content\": \"归档完成：M5 加固测试\"}",
+          "name": "write_file"
+        },
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_874eceba3f5d4624a7026b7c",
+    "content": "{\"ok\":true,\"path\":\"archive.txt\"}"
+  }
+]
