@@ -12,6 +12,8 @@ build/
 
 # 实验沙盒运行时产物
 learning/m3/sandbox/
+learning/m5/sandbox/
+learning/m5/session-saved.json
 
 # 系统文件
 .DS_Store
