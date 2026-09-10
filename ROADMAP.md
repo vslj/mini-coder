@@ -35,7 +35,7 @@
 **学习模块进度（详见 LEARNING.md）：**
 - [x] M1 LLM API 本质（总结见 learning/M1-学习总结.md）
 - [x] M2 工具调用机制（总结见 learning/M2-学习总结.md，实验脚本在 learning/m2/）
-- [ ] M3 Agent 循环（毕业实验：50 行裸 Agent）
+- [x] M3 Agent 循环（毕业实验 ✅：learning/m3/agent.mjs，~25 行核心循环的裸 Agent，即 mini-coder 阶段 0/1 原型）
 - [ ] M4 System Prompt
 - [ ] M5 上下文与工程
 - [ ] M6 生态与调研
@@ -62,5 +62,8 @@ mini-coder/
 └── learning/
     ├── M1-学习总结.md       # M1 学习沉淀 + 博客素材库
     ├── M2-学习总结.md       # M2 学习沉淀 + 博客素材库
-    └── m2/                  # M2 实验脚本（lib 共用库 / exp1 主线 / exp2、exp3 支线）
+    ├── M3-学习总结.md       # M3 学习沉淀 + 博客素材库
+    ├── m2/                  # M2 实验脚本（lib 共用库 / exp1 主线 / exp2、exp3 支线）
+    └── m3/
+        └── agent.mjs        # 毕业实验：裸 Agent（mini-coder 原型）
 ```

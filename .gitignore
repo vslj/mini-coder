@@ -10,6 +10,9 @@ node_modules/
 dist/
 build/
 
+# 实验沙盒运行时产物
+learning/m3/sandbox/
+
 # 系统文件
 .DS_Store
 Thumbs.db
