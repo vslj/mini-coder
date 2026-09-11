@@ -18,6 +18,8 @@
 - MiMo 的 usage 上报 `reasoning_tokens: 0`，但 message 里明明有 `reasoning_content` ——同平台自相矛盾，token 账不能只看一个字段
 - 脚本里预写"判读结论"文案，数据出来后结论是错的——脚本只呈现数据，判读是人的工作
 - 工具报错原文（含本机绝对路径）直接回传模型 → 本机环境信息泄漏进上下文，错误要先加工再回传
+- （阶段0）裸 fetch 的网络错误是普通 `TypeError: fetch failed`，不带状态码——provider 层必须把它包装成结构化错误（kind=network），否则重试层识别不了（M5 靠正则抓字符串的债，正式版第一天就还）
+- （阶段0）MiMo 不支持 `stream_options: {include_usage: true}`——流式响应全程无 usage，非流式正常（实测 256/218）。与"reasoning_tokens=0"前科同源：MiMo 的 usage 字段不能全信，流式场景干脆拿不到
 
 ## 三、同类实现调研（M6，2026-09-10 晚，全部经一手验证）
 
