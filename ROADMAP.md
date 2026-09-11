@@ -1,7 +1,7 @@
 # mini-coder 项目状态（ROADMAP）
 
 > **本文件是项目的"记忆源文件"**：所有关键决策、进度、协作规则都记录在这里，并随进展持续更新。换电脑/换助手时，读这一份即可接上下文。
-> 最后更新：2026-09-11
+> 最后更新：2026-09-11（阶段 0 完成，v0.1）
 
 ---
 
@@ -24,6 +24,10 @@
 | 文档/注释语言 | 全中文 | 2026-09-09 |
 | 实验通道 | 小米 MiMo（`api.xiaomimimo.com`，同时提供 OpenAI 兼容 `/v1` + Anthropic 原生 `/anthropic` 双端点），模型 `mimo-v2.5-pro`（2026-09-10 由 DeepSeek 切换） | 2026-09-10 |
 | 前置学习 | 先完成 M1–M6 前置知识学习（见 LEARNING.md），再启动阶段 0 | 2026-09-09 |
+| 包管理器 | pnpm（用户确认；npm 备选） | 2026-09-11 |
+| 运行方式 | ESM（type:module）+ tsx 开发 + tsc 构建 dist；零运行时依赖（教学卖点） | 2026-09-11 |
+| 消息格式 | 自定义最小中立格式，system 独立于 messages 数组；两 provider 各自显式映射协议 | 2026-09-11 |
+| 错误与重试 | 结构化 ProviderError(kind/status)；退避重试带入阶段 0（M5 曲线同款） | 2026-09-11 |
 
 **阶段规划（学习完成后执行）：**
 0. 地基：git/TS 脚手架/REPL/流式/provider 层 → `v0.1` tag + 博客①
@@ -40,6 +44,7 @@
 - [x] M5 上下文与工程（总结见 learning/M5-学习总结.md；compact.mjs + agent-hardened.mjs）
 - [x] M6 生态与调研（总结见 learning/M6-学习总结.md；四实现调研在 NOTES 第三栏，两篇必读带读完成，费曼检验通过——**学习路线 M1–M6 收官**）
 - [ ] 启动阶段 0（正式代码：provider 层 + agent 循环，原型见 learning/m3/agent.mjs 与 learning/m5/agent-hardened.mjs；verify work 主动自检留给阶段 3）
+- [x] 阶段 0 完成（2026-09-11，v0.1 tag）：TS 脚手架 + config/类型/错误层 + SSE 解析 + provider 双协议（OpenAI 兼容 / Anthropic 原生，MiMo 双端点实测通过）+ 流式渲染 + REPL。agent 主循环与工具属阶段 1
 
 ## 三、协作规则（对任何 AI 助手都生效）
 
@@ -57,20 +62,23 @@ mini-coder/
 ├── 说明.md                 # 项目原始简报（与前期 AI 对话整理）
 ├── ROADMAP.md              # 本文件：项目记忆源
 ├── LEARNING.md             # 前置学习课程计划（M1–M6）
+├── NOTES.md                # 博客素材主库（使用观察/踩坑/调研三栏）
+├── README.md               # 运行方式与结构（阶段 0 起维护）
 ├── .env                    # 本地密钥/通道配置（已 gitignore，绝不入库）
+├── package.json / tsconfig.json / pnpm-lock.yaml
 ├── scripts/
 │   └── test-llm.ps1        # M1 手动验证脚本（DeepSeek 通道）
+├── src/                    # 正式代码（阶段 0 起）
+│   ├── cli.ts              # 入口装配
+│   ├── config.ts           # .env + 环境变量 → AppConfig（key 全程脱敏）
+│   ├── types.ts            # 中立消息格式 + Provider 接口
+│   ├── errors.ts           # ProviderError + 指数退避重试
+│   ├── sse.ts              # 协议无关 SSE 行解析器
+│   ├── render.ts           # 流式终端渲染
+│   ├── repl.ts             # REPL 主循环
+│   └── providers/          # index 工厂 / openai.ts / anthropic.ts
 └── learning/
-    ├── M1-学习总结.md       # M1 学习沉淀 + 博客素材库
-    ├── M2-学习总结.md       # M2 学习沉淀 + 博客素材库
-    ├── M3-学习总结.md       # M3 学习沉淀 + 博客素材库
-    ├── M4-学习总结.md       # M4 学习沉淀 + 博客素材库
-    ├── M5-学习总结.md       # M5 学习沉淀 + 博客素材库
-    ├── m2/                  # M2 实验脚本（lib 共用库 / exp1 主线 / exp2、exp3 支线）
-    ├── m3/
-    |   ├── agent.mjs        # 毕业实验：裸 Agent（mini-coder 原型）
-    |   └── agent2.mjs       # M4 对照实验：同一 Agent + system prompt
-    └── m5/
-        ├── compact.mjs          # M5：成本曲线 + 手动 /compact
-        └── agent-hardened.mjs   # M5：三道防线（重试退避/权限分级/中断存档）
+    ├── M1~M6-学习总结.md    # 各模块学习沉淀 + 博客素材库
+    ├── m2/ m3/ m5/         # 实验脚本（lib / exp / 裸 Agent / hardened / compact）
+    └── (阶段 0 起实验逐步迁移为 src/ 正式代码)
 ```
