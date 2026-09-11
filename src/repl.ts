@@ -32,10 +32,25 @@ export async function startRepl({ providers, initial }: ReplOptions): Promise<vo
   let usageCount = 0; // 有多少轮真的拿到了 usage（MiMo 流式拿不到，见 NOTES）
   let currentAbort: AbortController | null = null;
 
-  // 空闲态 Ctrl+C：readline 正接管输入，^C 走 rl 自己的 SIGINT 事件
+  // Ctrl+C 两态。Windows 上有个隐蔽机制：readline 创建后终端进入"生模式"
+  // （raw mode），Ctrl+C 不再产生进程级 SIGINT，而是变成 \x03 字符交给
+  // readline 解释成 rl 自己的 SIGINT 事件。所以：
+  //  - 空闲态（readline 接管输入）：^C 走下面的 rl SIGINT → 退出；
+  //  - 流式态（rl.pause 且终端被我们临时切回"熟模式"）：^C 恢复为真正的
+  //    进程 SIGINT，走 process 级监听 → 中断当前请求。
+  // （教训：流式中若只 pause 不切模式，\x03 会滞留在输入缓冲区，
+  //   表现为"Ctrl+C 没反应，多按几次后突然退出"——积压的 ^C 迟到处理）
   rl.on("SIGINT", () => {
     console.log("\n(再见)");
     process.exit(130);
+  });
+  process.on("SIGINT", () => {
+    if (currentAbort) {
+      currentAbort.abort(); // 流式中：中断请求，回到提示符
+    } else {
+      console.log("\n(再见)"); // 兜底（非 TTY 等场景下没有 rl SIGINT）
+      process.exit(130);
+    }
   });
   // 输入流结束（EOF / Ctrl+D / 管道喂完）：干净退出，别让 question 悬着等 forever
   rl.on("close", () => {
@@ -99,6 +114,8 @@ export async function startRepl({ providers, initial }: ReplOptions): Promise<vo
     messages.push({ role: "user", content: line });
 
     rl.pause(); // 暂停输入监听：流式输出期间不能让按键回显打碎画面
+    // 切回"熟模式"：让 Ctrl+C 重新成为进程级信号（生模式下它是滞留缓冲区的 \x03）
+    process.stdin.setRawMode?.(false);
     currentAbort = new AbortController();
     let partial = ""; // 中断时记录已流出的正文，别让半截回答凭空消失
 
@@ -137,6 +154,8 @@ export async function startRepl({ providers, initial }: ReplOptions): Promise<vo
       }
     } finally {
       currentAbort = null;
+      // 还原"生模式"：readline 的行编辑依赖它；再恢复输入监听
+      process.stdin.setRawMode?.(true);
       rl.resume();
     }
   }

@@ -24,6 +24,8 @@
 - （阶段0）MiMo Anthropic 端点探测结论（2026-09-11，curl 一手验证）：path = `{ANTHROPIC_URL}/v1/messages`；鉴权 `x-api-key` 头直接可用；`anthropic-version` 头**不强制**（不带也 200，官方协议要求仍照发）；思维链以 `thinking` 块/`thinking_delta` 完整暴露
 - （阶段0）MiMo Anthropic 方言两则：① thinking 块的位置流式与非流式**不一致**——流式里先于 text（index 0），非流式 JSON 里却排在 text 后面（解析不能依赖顺序，只认块类型）；② 流式 `message_start` 的 `usage.input_tokens=1` 不可信（非流式同请求是 65），真实 output_tokens 在 `message_delta` 里；`cache_read_input_tokens` 是独立字段且按 Anthropic 语义不含在 input_tokens 里（1+256≈OpenAI 口径的 prompt_tokens 257）
 - （阶段0）Windows Git Bash 的 curl 用 `-d "{\"k\":...}"` 内联 JSON 会被引号转义搞坏（服务端报 Invalid JSON），走 `--data @file` 稳定
+- （阶段0）Windows + readline 的 Ctrl+C 隐蔽机制：readline 创建后终端进入生模式（raw mode），Ctrl+C 不再是进程级 SIGINT，而是 `\x03` 字符由 readline 解释成 rl 自己的 SIGINT 事件。若流式期间只 `rl.pause()` 不切模式，`\x03` 滞留在输入缓冲区——表现为"Ctrl+C 没反应，多按几次后突然退出"（积压的 ^C 在回到提示符后迟到爆发）。修法：pause 期间 `process.stdin.setRawMode(false)` 切回熟模式让 ^C 恢复为进程信号，resume 时再切回来
+- （阶段0）中断语义的实证：流式中断时把半截回答带 `[回答被用户中断]` 标注入历史，模型下一轮能精确说出自己断在哪一行——"中断不丢上下文"比"中断即丢弃"对 agent 场景更有价值（用户实测通过：JS 链表示例答到一半被中断，模型准确复述断点并主动提出续写）
 
 ## 三、同类实现调研（M6，2026-09-10 晚，全部经一手验证）
 
