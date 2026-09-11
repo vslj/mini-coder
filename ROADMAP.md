@@ -64,6 +64,7 @@ mini-coder/
 ├── LEARNING.md             # 前置学习课程计划（M1–M6）
 ├── NOTES.md                # 博客素材主库（使用观察/踩坑/调研三栏）
 ├── README.md               # 运行方式与结构（阶段 0 起维护）
+├── blog/                   # 系列博客文稿（通用 Markdown，对应各阶段 tag）
 ├── .env                    # 本地密钥/通道配置（已 gitignore，绝不入库）
 ├── package.json / tsconfig.json / pnpm-lock.yaml
 ├── scripts/
