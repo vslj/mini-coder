@@ -15,12 +15,22 @@
  * （前者只认 data:，后者要把 event: 和 data: 配对），解释权留在各分支。
  */
 
+// 可选观测：设 MINICODER_DEBUG=chunks 时把每个原始 chunk 打到 stderr。
+// 用途：让"跨 chunk 的行边界"从不可见变成可见——平时关闭，不影响教学主线。
+// 注意预览用一次性解码，chunk 恰好切在中文中间时预览里会出现 � ——这本身就
+// 是"为什么必须流式解码"的现场演示。
+const DEBUG_CHUNKS = process.env.MINICODER_DEBUG === "chunks";
+
 /** 把响应字节流切成一条条完整的行（不含行尾换行符）。 */
 export async function* sseLines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
   const decoder = new TextDecoder(); // 流式解码：不完整的 UTF-8 序列自动留到下一轮
   let buffer = "";
 
   for await (const chunk of body) {
+    if (DEBUG_CHUNKS) {
+      const preview = new TextDecoder().decode(chunk).replaceAll("\n", "\\n").slice(0, 70);
+      console.error(`[sse] chunk ${String(chunk.length).padStart(4)}B │ ${preview}`);
+    }
     buffer += decoder.decode(chunk, { stream: true });
     // 按换行切分；最后一段可能不完整（行还没结束），留在缓冲区等下一个 chunk
     const lines = buffer.split(/\r?\n/);

@@ -51,7 +51,9 @@ export async function withRetry<T>(
     } catch (e) {
       if (!isRetryable(e) || attempt >= maxRetries) throw e;
       const backoff = 1000 * 2 ** attempt + Math.random() * 500;
-      const status = e instanceof ProviderError ? `HTTP ${e.status}` : "网络错误";
+      // 标签按 kind 而不是按"是不是 ProviderError"：网络错误没有 status，
+      // 按 ProviderError 打会得到难看的 "HTTP undefined"
+      const status = e instanceof ProviderError && e.kind === "http" ? `HTTP ${e.status}` : "网络错误";
       console.error(`[${label}] ${status}，${Math.round(backoff)}ms 后重试（第 ${attempt + 1}/${maxRetries} 次）`);
       await new Promise((resolve) => setTimeout(resolve, backoff));
     }
