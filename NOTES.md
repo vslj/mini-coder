@@ -20,6 +20,7 @@
 - 工具报错原文（含本机绝对路径）直接回传模型 → 本机环境信息泄漏进上下文，错误要先加工再回传
 - （阶段0）裸 fetch 的网络错误是普通 `TypeError: fetch failed`，不带状态码——provider 层必须把它包装成结构化错误（kind=network），否则重试层识别不了（M5 靠正则抓字符串的债，正式版第一天就还）
 - （阶段0）MiMo 不支持 `stream_options: {include_usage: true}`——流式响应全程无 usage，非流式正常（实测 256/218）。与"reasoning_tokens=0"前科同源：MiMo 的 usage 字段不能全信，流式场景干脆拿不到
+- （阶段0）readline promises API 的管道模式坑：多行输入恰逢"没有 pending 的 question"（流式暂停中/LLM 调用中）到达时，部分行会被当作无监听者的 line 事件丢弃。交互 TTY 下用户看到提示符才输入，天然避开；但管道喂入/多行粘贴会触发。 推论：自动化测试 REPL 要逐行慢喂，且 stdin EOF 时 question 永不 settle → 必须挂 rl.on("close") 优雅退出，否则 Node 以 unsettled top-level await 警告退出（exit code 13）
 
 ## 三、同类实现调研（M6，2026-09-10 晚，全部经一手验证）
 

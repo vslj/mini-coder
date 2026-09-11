@@ -115,12 +115,20 @@ export function createOpenAIProvider(cfg: AppConfig): Provider {
         const payload = line.slice(5).trim();
         if (payload === "[DONE]") break; // 某些网关不发 [DONE]，流自然结束也能兜底
 
-        const chunk = JSON.parse(payload) as {
+        // 防御协议差异：坏行不该让整个进程崩掉，报成 protocol 错（这类错不重试）
+        let chunk: unknown;
+        try {
+          chunk = JSON.parse(payload);
+        } catch {
+          throw new ProviderError("protocol", `流中出现无法解析的 data 行: ${payload.slice(0, 200)}`);
+        }
+
+        const typed = chunk as {
           choices?: { delta?: { content?: string; reasoning_content?: string }; finish_reason?: string | null }[];
           usage?: { prompt_tokens?: number; completion_tokens?: number };
         };
 
-        const choice = chunk.choices?.[0];
+        const choice = typed.choices?.[0];
         if (!choice) continue; // 纯 usage 的收尾 chunk 没有 choices，跳过即可
 
         const delta = choice.delta;
@@ -136,8 +144,8 @@ export function createOpenAIProvider(cfg: AppConfig): Provider {
           stopReason = normalizeStop(choice.finish_reason);
           onEvent({ type: "done", stopReason });
         }
-        if (chunk.usage?.prompt_tokens !== undefined && chunk.usage.completion_tokens !== undefined) {
-          usage = { inputTokens: chunk.usage.prompt_tokens, outputTokens: chunk.usage.completion_tokens };
+        if (typed.usage?.prompt_tokens !== undefined && typed.usage.completion_tokens !== undefined) {
+          usage = { inputTokens: typed.usage.prompt_tokens, outputTokens: typed.usage.completion_tokens };
           onEvent({ type: "usage", usage });
         }
       }
