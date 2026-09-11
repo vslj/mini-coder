@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    /* 类型安全：教学代码的第一优先级是"读者看懂"，但看懂的前提是类型诚实 */
+    "strict": true,
+    /* resp.choices[0] 会变成 T | undefined，逼着处理"响应缺字段"的情况 */
+    "noUncheckedIndexedAccess": true,
+    /* 强制 import type：把"类型擦除"这一课显式化（编译后类型全消失） */
+    "verbatimModuleSyntax": true,
+
+    /* 模块体系：最终用 node 直接跑编译产物，NodeNext 是唯一正确解。
+       代价：源码里的相对导入必须写 .js 后缀（import from "./types.js"） */
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"]
+}

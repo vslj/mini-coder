@@ -4,6 +4,8 @@ node_modules/
 # 环境与密钥 —— 永远不要提交
 .env
 .env.*
+# 例外：占位示例（全部 sk-xxx，无真实值）需要入库供读者参考
+!.env.example
 *.key
 
 # 构建产物

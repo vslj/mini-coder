@@ -1,0 +1,20 @@
+{
+  "name": "mini-coder",
+  "version": "0.1.0",
+  "description": "仿写极简版 Claude Code 的学习项目：provider 层 + 流式 + REPL",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
