@@ -128,5 +128,5 @@ loop:
 - [x] M3 Agent 循环（毕业实验 ✅，总结见 [learning/M3-学习总结.md](learning/M3-学习总结.md)）
 - [x] M4 System Prompt（总结见 [learning/M4-学习总结.md](learning/M4-学习总结.md)）
 - [x] M5 上下文与工程（总结见 [learning/M5-学习总结.md](learning/M5-学习总结.md)）
-- [ ] M6 生态与调研
-- [ ] 全部通过 → 启动阶段 0
+- [x] M6 生态与调研（总结见 [learning/M6-学习总结.md](learning/M6-学习总结.md)）
+- [x] 全部通过 → 启动阶段 0

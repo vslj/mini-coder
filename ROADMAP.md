@@ -1,7 +1,7 @@
 # mini-coder 项目状态（ROADMAP）
 
 > **本文件是项目的"记忆源文件"**：所有关键决策、进度、协作规则都记录在这里，并随进展持续更新。换电脑/换助手时，读这一份即可接上下文。
-> 最后更新：2026-09-10
+> 最后更新：2026-09-11
 
 ---
 
@@ -38,9 +38,8 @@
 - [x] M3 Agent 循环（毕业实验 ✅：learning/m3/agent.mjs，~25 行核心循环的裸 Agent，即 mini-coder 阶段 0/1 原型）
 - [x] M4 System Prompt（总结见 learning/M4-学习总结.md；对照实验脚本 learning/m3/agent2.mjs）
 - [x] M5 上下文与工程（总结见 learning/M5-学习总结.md；compact.mjs + agent-hardened.mjs）
-- [ ] M4 System Prompt
-- [ ] M5 上下文与工程
-- [ ] M6 生态与调研
+- [x] M6 生态与调研（总结见 learning/M6-学习总结.md；四实现调研在 NOTES 第三栏，两篇必读带读完成，费曼检验通过——**学习路线 M1–M6 收官**）
+- [ ] 启动阶段 0（正式代码：provider 层 + agent 循环，原型见 learning/m3/agent.mjs 与 learning/m5/agent-hardened.mjs；verify work 主动自检留给阶段 3）
 
 ## 三、协作规则（对任何 AI 助手都生效）
 

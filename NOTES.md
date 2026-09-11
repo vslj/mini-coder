@@ -7,6 +7,7 @@
 - （M1 期间）上下文快满时出现压缩提示（compact），压缩后模型"忘掉"部分细节——**压缩是客户端在改 messages 数组**
 - （M2/M3 期间）Claude Code 每次执行写文件、跑命令前弹权限确认，可选"本会话不再询问"——**确认发生在程序侧，模型无法绕过**
 - （M4 期间）CLAUDE.md = 用户可自定义的 system prompt 素材：启动时被注入到 system prompt，最终生效的 = 内置指令（改不了）+ CLAUDE.md（用户层）+ 记忆；它仍是软约束，硬约束在程序侧（权限/hooks）——M4"软硬约束分工"的产品化实例
+- （M5 期间）Skill = 按需加载的工作流说明书（软约束的加强版）；hooks = 挂在程序生命周期上的代码关卡（硬约束的正式形态）——"根本不经过模型"，prompt 注入也绕不过。三者的表格式对比见 M4/M5 学习对话
 - （待记）……
 
 ## 二、踩坑记录（实验/开发中真实踩过的坑）
@@ -18,7 +19,32 @@
 - 脚本里预写"判读结论"文案，数据出来后结论是错的——脚本只呈现数据，判读是人的工作
 - 工具报错原文（含本机绝对路径）直接回传模型 → 本机环境信息泄漏进上下文，错误要先加工再回传
 
-## 三、同类实现调研（M6 正式展开，先占位）
+## 三、同类实现调研（M6，2026-09-10 晚，全部经一手验证）
 
-- （M5 期间）退避重试的随机抖动防的是重试风暴：服务端抖动后所有客户端同步重试会形成洪峰；单客户端串行也在和所有用户竞争恢复中的容量
-- （待记）……
+> 调研方式说明：本环境 WebSearch 被拒（403）、部分域名不可达，改用 curl 抓页面（均 200）+ 从 PyPI 下载官方源码包直接读代码完成，无编造。
+
+### 四个实现 + 一篇机制剖析
+
+- **Amp《How to Build an Agent》**（ampcode.com/how-to-build-an-agent）：约 190 行 Go，3 个文件工具（read_file/list_files/edit_file），Anthropic 协议。核心论点 **"agent = an LLM, a loop, and enough tokens"**；工具出错带 `is_error` 喂回模型自愈。无重试/权限/压缩/流式
+- **HuggingFace smolagents**（github.com/huggingface/smolagents）：agent 逻辑约 1000 行。核心理念 **"agents that think in code"**——模型的动作是一段 Python 而非 JSON 工具调用；沙箱执行（本地受限解释器/E2B/Docker）；max_steps=20，超限先发"总结请求"做最后抢救
+- **mini-swe-agent**（github.com/SWE-agent/mini-swe-agent，Princeton SWE-agent 团队）：agent 类约 100 行。**"everything is bash"**——唯一工具是 bash，文本协议（\`\`\`bash 代码块）而非 function calling；用异常做控制流状态机；trajectory 逐轮落盘 + 逐次成本记账（SWE-bench 评测逼出来的工程细节）
+- **Anthropic《Building agents with the Claude Agent SDK》**（anthropic.com/engineering/building-agents-with-the-claude-agent-sdk）：Claude Code 机制官方剖析。循环 = **gather context → take action → verify work → repeat**；agentic search（让模型自己 grep）通常优于语义检索，"文件系统就是 context engineering"；subagent 并行 + 上下文隔离；compaction 自动摘要
+- HumanLayer 12-factor agents（humanlayer.dev/12-factor-agents，2026-09-11 已验证可达 200；内容未读，写博客前需读原文）
+
+### 跨实现共同模式（≈ agent 的最小定义）
+
+1. **同一个循环骨架**：`while 未结束: 调 LLM → 解析动作 → 执行 → 结果回填 messages`——四家无一例外
+2. **客户端持有会话**：模型服务端无状态，每轮全量重发，上下文管理是共同暗坑
+3. **终止两件套**：模型自答（无 tool_use / final_answer）或硬限额（max_steps/成本/时间）
+4. **工具调用本质 = 特殊文本 → 本地解析执行 → 结果回填**；工具集都极小（3 个文件工具 / 1 个 bash）——殊途同归于"给模型一台计算机"
+5. **错误喂回模型自愈，而非代码层重试**——四家都没有 API 级 retry/backoff
+
+### 共同缺位（正好是博客"下一步"清单）
+
+1. **权限/审批**：没有一家有逐操作确认或 allowlist——Claude Code 的 permission prompt 恰是"产品与玩具的分水岭"
+2. **上下文压缩**：三家代码都是消息线性增长，只有 Anthropic 剖析文给出 compaction/subagent 隔离作为正式答案
+3. **API 重试/退避、流式、断点恢复**：全部缺位
+4. **Eval/轨迹回放**：只有 SWE-bench 团队做了——"评测需求才是工程能力的驱动力"
+5. **沙箱是可选项不是默认**
+
+> **对照 mini-coder 的有趣结论**：我们在 M5 已经做了其中三家都没有的东西（退避重试、权限分级确认、Ctrl+C 存档续跑、错误脱敏）——学习路线的选择恰好补在"最小实现"与"可用产品"的鸿沟上。
