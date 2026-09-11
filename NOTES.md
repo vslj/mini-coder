@@ -21,6 +21,9 @@
 - （阶段0）裸 fetch 的网络错误是普通 `TypeError: fetch failed`，不带状态码——provider 层必须把它包装成结构化错误（kind=network），否则重试层识别不了（M5 靠正则抓字符串的债，正式版第一天就还）
 - （阶段0）MiMo 不支持 `stream_options: {include_usage: true}`——流式响应全程无 usage，非流式正常（实测 256/218）。与"reasoning_tokens=0"前科同源：MiMo 的 usage 字段不能全信，流式场景干脆拿不到
 - （阶段0）readline promises API 的管道模式坑：多行输入恰逢"没有 pending 的 question"（流式暂停中/LLM 调用中）到达时，部分行会被当作无监听者的 line 事件丢弃。交互 TTY 下用户看到提示符才输入，天然避开；但管道喂入/多行粘贴会触发。 推论：自动化测试 REPL 要逐行慢喂，且 stdin EOF 时 question 永不 settle → 必须挂 rl.on("close") 优雅退出，否则 Node 以 unsettled top-level await 警告退出（exit code 13）
+- （阶段0）MiMo Anthropic 端点探测结论（2026-09-11，curl 一手验证）：path = `{ANTHROPIC_URL}/v1/messages`；鉴权 `x-api-key` 头直接可用；`anthropic-version` 头**不强制**（不带也 200，官方协议要求仍照发）；思维链以 `thinking` 块/`thinking_delta` 完整暴露
+- （阶段0）MiMo Anthropic 方言两则：① thinking 块的位置流式与非流式**不一致**——流式里先于 text（index 0），非流式 JSON 里却排在 text 后面（解析不能依赖顺序，只认块类型）；② 流式 `message_start` 的 `usage.input_tokens=1` 不可信（非流式同请求是 65），真实 output_tokens 在 `message_delta` 里；`cache_read_input_tokens` 是独立字段且按 Anthropic 语义不含在 input_tokens 里（1+256≈OpenAI 口径的 prompt_tokens 257）
+- （阶段0）Windows Git Bash 的 curl 用 `-d "{\"k\":...}"` 内联 JSON 会被引号转义搞坏（服务端报 Invalid JSON），走 `--data @file` 稳定
 
 ## 三、同类实现调研（M6，2026-09-10 晚，全部经一手验证）
 
