@@ -20,3 +20,7 @@ learning/m5/session-saved.json
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 其他
+说明.md
+
