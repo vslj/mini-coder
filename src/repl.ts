@@ -188,6 +188,9 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
         // AgentTurnResult 也没有透出它）——保持循环输出聚焦在工具活动与回答上
         if (result.stopped === "answer") {
           console.log(result.content);
+        } else if (result.stopped === "cancelled") {
+          // 确认弹窗里的 Ctrl+C：与流式中断同一套话术——进度保留，"继续"能接上
+          console.log(`[回合已被 Ctrl+C 中止，任务进度已保留，直接说"继续"即可接着做]`);
         } else {
           console.log(
             `[已达 ${result.rounds} 轮上限，强制停止——模型可能在工具调用里打转，试试换个问法或 /clear]`,

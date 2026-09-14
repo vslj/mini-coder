@@ -51,10 +51,10 @@ export interface AgentTurnOptions {
 }
 
 export interface AgentTurnResult {
-  /** 最终回答；stopped === "max_rounds" 时为空串。 */
+  /** 最终回答；stopped === "answer" 时有值，max_rounds/cancelled 时为空串。 */
   content: string;
-  /** answer = 自然停；max_rounds = 强制停。 */
-  stopped: "answer" | "max_rounds";
+  /** answer = 自然停；max_rounds = 轮数用尽强制停；cancelled = 用户在确认弹窗按 Ctrl+C 中止。 */
+  stopped: "answer" | "max_rounds" | "cancelled";
   rounds: number;
   /** 整个回合（可能多轮请求）累计的 token 用量。 */
   usage?: Usage;
@@ -92,15 +92,36 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<AgentTurnRes
       // 再逐个执行、逐条回传。工具执行不消耗网络，一般不会在中途被打断，
       // 但 execute 是 await 的——万一未来有慢工具被 abort 打断，
       // 下面的 catch 也会把整回合回滚，不会留下没对上号的 tool_call
-      for (const call of result.toolCalls) {
+      const calls = result.toolCalls;
+      for (let i = 0; i < calls.length; i++) {
+        const call = calls[i]!; // noUncheckedIndexedAccess：i < length 已由循环条件保证
         hooks?.onToolCall?.(call.name, call.args);
 
         // 权限门：写类工具（needsApproval）执行前先过用户确认。
-        // 拒绝也是"结果"——原样喂回模型，让它调整方案而不是闷头重试（自愈机制）
+        // n = 拒绝这一次，结果喂回让模型换方案（自愈机制——措辞是行为设计的杠杆）；
+        // Ctrl+C = 中止。实测（v0.3.2）：就算提示词明说"不要再次发起同样的操作"，
+        // 模型照样会再试一次——软约束（措辞）挡不住模型，硬约束（程序侧直接停）才可靠。
+        // 中止时把本轮剩余调用一并按"未执行"回填——tool_use/tool_result 必须成对，
+        // 历史才协议合法（"中断时刻的历史总是协议合法"在这里靠补齐维持），
+        // 然后提前结束回合：进度保留，"继续"能接上。
         const tool = tools.get(call.name);
         if (tool?.needsApproval && gate) {
           const preview = tool.preview?.(call.args);
           const decision = await gate.check(call.name, preview);
+          if (decision === "cancel") {
+            for (let j = i; j < calls.length; j++) {
+              const rest = calls[j]!; // 同上：j < length 由循环条件保证
+              const cancelled = JSON.stringify({
+                error:
+                  j === i
+                    ? "用户在确认弹窗按了 Ctrl+C，中止了这次操作（视为拒绝）。不要再次发起同样的操作，等待用户的新指示。"
+                    : "用户按 Ctrl+C 中止了本回合，此操作未执行。",
+              });
+              hooks?.onToolResult?.(rest.name, false, cancelled);
+              messages.push({ role: "tool", toolCallId: rest.id, content: cancelled });
+            }
+            return { content: "", stopped: "cancelled", rounds: round, usage: totalUsage };
+          }
           if (decision === "deny") {
             const denied = JSON.stringify({
               error: "用户拒绝了这次操作。不要原样重试；如果仍有必要，请换一种方案或向用户说明。",
