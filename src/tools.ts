@@ -21,6 +21,16 @@ export interface Tool {
   readonly description: string;
   /** 标准 JSON Schema，描述 run 能接受什么参数。 */
   readonly parameters: Record<string, unknown>;
+  /**
+   * 写类工具设为 true：执行前要过权限门（用户 y/n/a 确认）。
+   * 读类工具（read/list）不设——读自己工作区的文件是 agent 的基本权利。
+   */
+  readonly needsApproval?: boolean;
+  /**
+   * 确认弹窗里展示的"改动预览"（写类工具实现，如 diff）。
+   * 预览生成失败不算错误（比如目标文件还不存在），返回 undefined 就行。
+   */
+  preview?(args: Record<string, unknown>): string | undefined;
   run(args: Record<string, unknown>): unknown | Promise<unknown>;
 }
 
@@ -42,6 +52,11 @@ export class ToolRegistry {
 
   list(): Tool[] {
     return [...this.tools.values()];
+  }
+
+  /** 按名取工具本体（agent 循环在执行前要用它判断 needsApproval / 生成预览）。 */
+  get(name: string): Tool | undefined {
+    return this.tools.get(name);
   }
 
   /** 给 provider 层的说明书列表（中立格式，各协议自行翻译）。 */

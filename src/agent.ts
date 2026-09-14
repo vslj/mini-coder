@@ -20,6 +20,7 @@
  */
 
 import type { ChatMessage, Provider, Usage } from "./types.js";
+import type { PermissionGate } from "./permissions.js";
 import type { ToolRegistry } from "./tools.js";
 
 /** 循环对外报告进度的回调；全部可选，不传就是静默循环。 */
@@ -40,6 +41,11 @@ export interface AgentTurnOptions {
   system?: string;
   /** 轮数上限，默认 8（M3 实验同款默认值）。 */
   maxRounds?: number;
+  /**
+   * 权限门：needsApproval 的工具执行前要先过这里。
+   * 不传 = 没有权限层（工具直接执行）——阶段 1 的形态。
+   */
+  gate?: PermissionGate;
   signal?: AbortSignal;
   hooks?: AgentHooks;
 }
@@ -55,7 +61,7 @@ export interface AgentTurnResult {
 }
 
 export async function runAgentTurn(opts: AgentTurnOptions): Promise<AgentTurnResult> {
-  const { provider, messages, tools, system, signal, hooks } = opts;
+  const { provider, messages, tools, system, signal, hooks, gate } = opts;
   const maxRounds = opts.maxRounds ?? 8;
   const startLen = messages.length; // 回合原子性的锚点：出错就回滚到这里
   const totalUsage: Usage = { inputTokens: 0, outputTokens: 0 };
@@ -88,6 +94,23 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<AgentTurnRes
       // 下面的 catch 也会把整回合回滚，不会留下没对上号的 tool_call
       for (const call of result.toolCalls) {
         hooks?.onToolCall?.(call.name, call.args);
+
+        // 权限门：写类工具（needsApproval）执行前先过用户确认。
+        // 拒绝也是"结果"——原样喂回模型，让它调整方案而不是闷头重试（自愈机制）
+        const tool = tools.get(call.name);
+        if (tool?.needsApproval && gate) {
+          const preview = tool.preview?.(call.args);
+          const decision = await gate.check(call.name, preview);
+          if (decision === "deny") {
+            const denied = JSON.stringify({
+              error: "用户拒绝了这次操作。不要原样重试；如果仍有必要，请换一种方案或向用户说明。",
+            });
+            hooks?.onToolResult?.(call.name, false, denied);
+            messages.push({ role: "tool", toolCallId: call.id, content: denied });
+            continue;
+          }
+        }
+
         const outcome = await tools.execute(call.name, call.args);
         hooks?.onToolResult?.(call.name, outcome.ok, outcome.content);
         messages.push({ role: "tool", toolCallId: call.id, content: outcome.content });

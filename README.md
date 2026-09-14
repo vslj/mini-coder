@@ -2,7 +2,7 @@
 
 仿写极简版 Claude Code 的学习项目：**不依赖任何 SDK / 框架**，从裸 HTTP 请求开始，把 LLM API、流式、provider 抽象、Agent 循环逐层亲手写一遍。配套系列博客（亲身实践 → 原理 → mini 实现）。
 
-当前进度：**阶段 1（工具框架）** —— 在阶段 0 的 provider 层 + 流式 + REPL 之上，加入工具 schema、执行器与 agent 主循环（`/tools` 命令在"agent 模式/纯聊天"间切换）。
+当前进度：**阶段 2（文件工具 + 安全）** —— 四个真实文件工具（read/write/list/edit）+ 路径逃逸防护 + 敏感文件闸 + 写操作权限确认（y/n/a，带 diff 预览）。阶段 1：工具框架 + agent 主循环（`/tools` 切换 agent/纯聊天模式）。
 
 ## 运行
 
@@ -18,7 +18,7 @@ REPL 内命令：`/help` `/exit` `/clear` `/usage` `/provider [openai|anthropic]
 pnpm build && pnpm start   # 构建产物运行（tsc → dist/）
 ```
 
-## 结构（阶段 1）
+## 结构（阶段 2）
 
 ```
 src/
@@ -29,9 +29,12 @@ src/
 ├── sse.ts               # 协议无关 SSE 行解析器
 ├── render.ts            # 流式终端渲染（暗淡思维链 → 正文）
 ├── repl.ts              # REPL 主循环（纯聊天流式 / agent 模式两种形态）
-├── agent.ts             # agent 主循环（想 → 做 → 看结果 → 再想，回合原子性 + 轮数上限）
+├── agent.ts             # agent 主循环（想 → 做 → 看结果 → 再想，回合原子性 + 轮数上限 + 权限门）
 ├── tools.ts             # 工具框架：注册表 + 执行器（错误脱敏后喂回模型自愈）
 ├── tools-demo.ts        # 阶段 1 演示工具（get_time / calculate）
+├── tools-fs.ts          # 阶段 2 文件工具（read/write/list/edit + 逃逸防护 + 敏感文件闸）
+├── permissions.ts       # 权限门：y/n/a 交互确认 + 会话记忆 + Ctrl+C=拒绝
+├── diff.ts              # 自写最小行级 LCS diff（写操作预览）
 └── providers/
     ├── index.ts         # 工厂
     ├── openai.ts        # OpenAI 兼容协议分支

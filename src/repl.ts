@@ -15,6 +15,7 @@
 
 import * as readline from "node:readline/promises";
 import { runAgentTurn } from "./agent.js";
+import { createInteractiveGate, type PermissionGate } from "./permissions.js";
 import { createRenderer } from "./render.js";
 import type { ToolRegistry } from "./tools.js";
 import type { ChatMessage, Provider, Usage } from "./types.js";
@@ -44,6 +45,8 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
   let currentAbort: AbortController | null = null;
   // agent 模式默认开（有工具就用）；/tools off 可切回纯聊天对照
   let agentMode = tools !== undefined;
+  // 权限门：写类工具的 y/n/a 确认。挂在 rl 上——确认输入就是普通的一行输入
+  const gate: PermissionGate | undefined = tools ? createInteractiveGate(rl) : undefined;
 
   // Ctrl+C 两态。Windows 上有个隐蔽机制：readline 创建后终端进入"生模式"
   // （raw mode），Ctrl+C 不再产生进程级 SIGINT，而是变成 \x03 字符交给
@@ -58,6 +61,8 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
     process.exit(130);
   });
   process.on("SIGINT", () => {
+    // 优先级 1：确认弹窗挂起中——^C = 拒绝当前操作，不是退出
+    if (gate?.cancelPending()) return;
     if (currentAbort) {
       currentAbort.abort(); // 流式中：中断请求，回到提示符
     } else {
@@ -70,8 +75,7 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
     console.log("\n(输入结束，再见)");
     process.exit(0);
   });
-  // 流式态 Ctrl+C：readline 已暂停，^C 是进程级信号 → 中断当前请求
-  process.on("SIGINT", () => currentAbort?.abort());
+  // 流式态 Ctrl+C 的中断逻辑已并入上面的主 SIGINT 处理器（优先级：确认弹窗 > 请求中断 > 退出）
 
   const renderer = createRenderer();
 
@@ -125,7 +129,10 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
         continue;
       }
       console.log(`已注册工具（agent 模式：${agentMode ? "开" : "关"}）:`);
-      for (const t of tools.list()) console.log(`  ${t.name} —— ${t.description}`);
+      for (const t of tools.list()) {
+        console.log(`  ${t.name}${t.needsApproval ? " 🔒" : ""} —— ${t.description}`);
+      }
+      console.log("（🔒 = 写类工具，执行前需要确认）");
       continue;
     }
     if (line === "/help") {
@@ -157,15 +164,18 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
           messages,
           tools,
           system,
+          gate,
           signal: currentAbort.signal,
           hooks: {
             onToolCall(name, args) {
-              process.stdout.write(`${DIM}⚙ ${name}(${JSON.stringify(args)})`);
+              // 参数截断展示：write_file 的 content 参数可能几千字，终端只画个开头
+              const shown = JSON.stringify(args);
+              process.stdout.write(`${DIM}⚙ ${name}(${shown.length > 120 ? `${shown.slice(0, 120)}…` : shown})`);
             },
             onToolResult(_name, ok, content) {
               // 结果截断展示：完整内容已经进历史喂给模型了，终端只画个概要
-              const shown = content.length > 100 ? `${content.slice(0, 100)}…` : content;
-              process.stdout.write(` ${RESET}${ok ? "→" : "✗"} ${shown}\n`);
+              const brief = content.length > 100 ? `${content.slice(0, 100)}…` : content;
+              process.stdout.write(` ${RESET}${ok ? "→" : "✗"} ${brief}\n`);
             },
           },
         });

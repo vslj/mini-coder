@@ -1,7 +1,7 @@
 {
   "name": "mini-coder",
-  "version": "0.2.0",
-  "description": "仿写极简版 Claude Code 的学习项目：provider 层 + 流式 + REPL + 工具框架 + agent 主循环",
+  "version": "0.3.0",
+  "description": "仿写极简版 Claude Code 的学习项目：provider 层 + 流式 + REPL + 工具框架 + agent 主循环 + 文件工具与安全",
   "type": "module",
   "engines": {
     "node": ">=20"
