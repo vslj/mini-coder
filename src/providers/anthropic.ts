@@ -12,6 +12,9 @@
  *   | 思维链     | 厂商私有字段 reasoning_content  | content 数组里的 thinking 块             |
  *   | 停止原因   | stop / length                  | end_turn / max_tokens                   |
  *   | 流式       | 纯 data: 行流                  | event: + data: 成对的事件流              |
+ *   | 工具说明书  | {type:"function", function:{…}}| {name, description, input_schema}        |
+ *   | 工具参数    | arguments 是 **JSON 字符串**    | input 直接是 JSON 对象                   |
+ *   | 工具结果    | 独立 role:"tool" 消息          | 塞进下一条 user 消息的 tool_result 块     |
  *
  * MiMo 实测方言（2026-09-11，详见 NOTES）：thinking 块在流式里先于 text、
  * 在非流式里却后于 text；message_start 里的 usage 数值不可信（input_tokens=1）；
@@ -21,7 +24,7 @@
 import type { AppConfig } from "../config.js";
 import { ProviderError, withRetry } from "../errors.js";
 import { sseLines } from "../sse.js";
-import type { ChatMessage, ChatOptions, ChatResult, Provider, Role, StopReason } from "../types.js";
+import type { ChatMessage, ChatOptions, ChatResult, Provider, StopReason, ToolCall, ToolSchema } from "../types.js";
 
 /** Anthropic 协议必填项，OpenAI 没有这个概念——放这里而不是 config，它属于协议细节。 */
 const MAX_TOKENS = 4096;
@@ -29,12 +32,50 @@ const MAX_TOKENS = 4096;
 function normalizeStop(stopReason: string | null | undefined): StopReason {
   if (stopReason === "end_turn") return "stop";
   if (stopReason === "max_tokens") return "length";
+  if (stopReason === "tool_use") return "tool_use";
   return "other";
 }
 
-/** 消息直通翻译：Anthropic 的 user/assistant + 字符串 content 与中立格式几乎同构。 */
-function toWireMessages(messages: ChatMessage[]): { role: Role; content: string }[] {
-  return messages.map((m) => ({ role: m.role, content: m.content }));
+/** 工具说明书出站翻译：中立 ToolSchema → Anthropic 的 input_schema 形态。 */
+function toWireTools(tools: ToolSchema[]): object[] {
+  return tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
+}
+
+/**
+ * 中立消息 → Anthropic 协议。这里有两处协议独有的规矩：
+ *
+ *  1. 工具结果不是独立消息，而是塞进"紧接着的 user 消息"的 tool_result 块里；
+ *     中立格式里每条工具结果是独立消息，所以连续的 tool 消息要在这里
+ *     合并成一条 user 消息（多个块）——合并逻辑是 Anthropic 分支的独门活。
+ *  2. assistant 要调工具时，content 是块数组：文本块（可有可无）+ tool_use 块。
+ *     thinking 块在这里消失——中立格式本来就不回传 reasoning，阶段 1 实验①
+ *     证明 MiMo 端点对此照单全收（真 Anthropic 开 thinking 时会强制要求回传，
+ *     到时候是 provider 内部要补的特殊处理，中立格式不用动）。
+ */
+function toWireMessages(messages: ChatMessage[]): object[] {
+  const wire: object[] = [];
+  for (const m of messages) {
+    if (m.role === "tool") {
+      const block = { type: "tool_result", tool_use_id: m.toolCallId ?? "", content: m.content };
+      // 前一条已经是"装工具结果的 user 消息"就往里追加，否则新开一条
+      const last = wire[wire.length - 1] as { role?: string; content?: unknown } | undefined;
+      if (last?.role === "user" && Array.isArray(last.content)) {
+        (last.content as object[]).push(block);
+      } else {
+        wire.push({ role: "user", content: [block] });
+      }
+      continue;
+    }
+    if (m.toolCalls) {
+      const blocks: object[] = [];
+      if (m.content) blocks.push({ type: "text", text: m.content });
+      for (const c of m.toolCalls) blocks.push({ type: "tool_use", id: c.id, name: c.name, input: c.args });
+      wire.push({ role: "assistant", content: blocks });
+      continue;
+    }
+    wire.push({ role: m.role, content: m.content });
+  }
+  return wire;
 }
 
 export function createAnthropicProvider(cfg: AppConfig): Provider {
@@ -71,12 +112,20 @@ export function createAnthropicProvider(cfg: AppConfig): Provider {
         model: cfg.model,
         max_tokens: MAX_TOKENS,
         ...(opts?.system ? { system: opts.system } : {}),
+        ...(opts?.tools ? { tools: toWireTools(opts.tools) } : {}),
         messages: toWireMessages(messages),
       };
       const resp = await withRetry(() => fetchResponse(body, opts?.signal), 3, "chat");
 
       const data = (await resp.json()) as {
-        content?: { type: string; text?: string; thinking?: string }[];
+        content?: {
+          type: string;
+          text?: string;
+          thinking?: string;
+          id?: string;
+          name?: string;
+          input?: Record<string, unknown>;
+        }[];
         stop_reason?: string;
         usage?: { input_tokens?: number; output_tokens?: number };
       };
@@ -84,16 +133,22 @@ export function createAnthropicProvider(cfg: AppConfig): Provider {
         throw new ProviderError("protocol", `响应缺少 content 数组: ${JSON.stringify(data).slice(0, 300)}`);
       }
 
-      // 防御性遍历 content 数组：只认 text/thinking 块，未知类型跳过（协议在演化）
+      // 防御性遍历 content 数组：只认 text/thinking/tool_use 块，未知类型跳过（协议在演化）
       let content = "";
       let reasoning = "";
+      const toolCalls: ToolCall[] = [];
       for (const block of data.content) {
         if (block.type === "text" && block.text) content += block.text;
         if (block.type === "thinking" && block.thinking) reasoning += block.thinking;
+        // tool_use 块：input 已是对象，无需 parse（与 OpenAI 分支的对照点）
+        if (block.type === "tool_use" && block.id && block.name) {
+          toolCalls.push({ id: block.id, name: block.name, args: block.input ?? {} });
+        }
       }
 
       const result: ChatResult = { content, stopReason: normalizeStop(data.stop_reason) };
       if (reasoning) result.reasoning = reasoning;
+      if (toolCalls.length) result.toolCalls = toolCalls;
       if (data.usage?.input_tokens !== undefined && data.usage.output_tokens !== undefined) {
         result.usage = { inputTokens: data.usage.input_tokens, outputTokens: data.usage.output_tokens };
       }
@@ -101,6 +156,8 @@ export function createAnthropicProvider(cfg: AppConfig): Provider {
     },
 
     async chatStream(messages, onEvent, opts) {
+      // 阶段 1 范围：流式暂不支持 tool_use 块的 input_json_delta 累积（与 OpenAI 分支同理），
+      // 工具轮次一律走非流式 chat()。流式+工具作为后续可选支线。
       const body = {
         model: cfg.model,
         max_tokens: MAX_TOKENS,

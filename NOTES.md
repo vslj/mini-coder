@@ -13,6 +13,11 @@
 - （阶段0 验收实测）断网重试曲线 1405/2022/4326ms，与 M5 学习时的 1114/2214/4388ms 同款公式；三次耗尽后干净报 `[provider 错误 network]`，进程不崩、提问撤回——结构化错误 + 退避在真实故障下端到端工作
 - （阶段0 验收实测）几百字长中文流式回复无乱码无丢字（TextDecoder 行缓冲通过）。但"通过"的表现恰恰是看不见任何东西——为让跨 chunk 边界可观测，加 MINICODER_DEBUG=chunks 调试开关（stderr 打原始 chunk，预览切在中文中间出现 � 就是流式解码必要性的现场演示）
 - （阶段0 验收实测）token 账单决定性一幕：anthropic 分支下新问题仅 ~10 token，输入计费却高达 2427——差额是全会话历史（含 500 字长回答）全量重发。**成本由历史长度驱动，与新输入几乎无关**，M5 成本曲线的现场复现。另：MiMo 的 Anthropic 流式回 usage（输出 149），OpenAI 流式全程不回——双分支 usage 可得性不对称，/usage 数字只在 anthropic 侧增长
+- （阶段1 实验①，learning/p1/）双端点工具调用对照一手实测：OpenAI 侧 arguments 是 **JSON 字符串**要自己 parse、停止原因 `tool_calls`、结果挂独立 `role:"tool"` 消息；Anthropic 侧 input 直接是 **JSON 对象**、停止原因 `tool_use`、结果要塞进下一条 user 消息的 `tool_result` 块。同一件事三种写法——provider 抽象层必要性的第二章
+- （阶段1 实验①）MiMo Anthropic 端点返回的 `thinking` 块 **signature 是空字符串**，且剥掉 thinking 块再回传端点照常接受——真 Anthropic 开 thinking 时强制回传带签名的 thinking 块，仿制端点的宽容度是"不能依赖宽容"的又一证据（同 DeepSeek 忽略 reasoning_content 的前科）
+- （阶段1 验收实测）agent 模式一轮任务里模型**并行要两个工具**（get_time + calculate 同轮），循环逐个执行逐条回传后模型汇总——"一次说话多个 tool_calls"是常态，回传必须逐条对号
+- （阶段1 验收实测）非流式下双协议 usage 都有账（agent 模式 /usage 正常增长），与阶段 0 流式下 OpenAI 侧无账形成对照——**账目可得性跟着"流式与否"走，不跟着协议走**
+- （阶段1 验收实测）/tools off 切回纯聊天流式，打字机与 [思考] 显示零回归——两种模式共享同一份 messages 历史，"模式"只是循环形状不同，会话状态是同一个
 - （待记）……
 
 ## 二、踩坑记录（实验/开发中真实踩过的坑）
@@ -31,6 +36,9 @@
 - （阶段0）Windows Git Bash 的 curl 用 `-d "{\"k\":...}"` 内联 JSON 会被引号转义搞坏（服务端报 Invalid JSON），走 `--data @file` 稳定
 - （阶段0）Windows + readline 的 Ctrl+C 隐蔽机制：readline 创建后终端进入生模式（raw mode），Ctrl+C 不再是进程级 SIGINT，而是 `\x03` 字符由 readline 解释成 rl 自己的 SIGINT 事件。若流式期间只 `rl.pause()` 不切模式，`\x03` 滞留在输入缓冲区——表现为"Ctrl+C 没反应，多按几次后突然退出"（积压的 ^C 在回到提示符后迟到爆发）。修法：pause 期间 `process.stdin.setRawMode(false)` 切回熟模式让 ^C 恢复为进程信号，resume 时再切回来
 - （阶段0）中断语义的实证：流式中断时把半截回答带 `[回答被用户中断]` 标注入历史，模型下一轮能精确说出自己断在哪一行——"中断不丢上下文"比"中断即丢弃"对 agent 场景更有价值（用户实测通过：JS 链表示例答到一半被中断，模型准确复述断点并主动提出续写）
+- （阶段1）MiMo Anthropic 端点的 tool_use 块 id 前缀是 `call_...`（OpenAI 风格），官方 Anthropic 是 `toolu_` 前缀——仿制端点内部大概是同一套实现两个皮，协议方言又添一证（对号逻辑不能依赖 id 格式，只当不透明字符串用）
+- （阶段1）管道喂 REPL 的坑再确认：Windows readline 对"一次性到齐的管道输入"只交付给 pending 中的 question，后续行在流式/LLM 调用期间到达就丢（阶段 0 已记，今天换 pnpm exec 直连再踩一次）。自动化验收必须逐行喂+sleep 间隔
+- （阶段1）calculate 演示工具的白名单教训写进代码注释：`new Function` 求值前必须先过字符白名单正则——"先校验后执行"是阶段 2 文件工具路径白名单的预演
 
 ## 三、同类实现调研（M6，2026-09-10 晚，全部经一手验证）
 

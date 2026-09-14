@@ -10,13 +10,22 @@
 import type { AppConfig } from "../config.js";
 import { ProviderError, withRetry } from "../errors.js";
 import { sseLines } from "../sse.js";
-import type { ChatMessage, ChatOptions, ChatResult, Provider, StopReason, StreamEvent } from "../types.js";
+import type { ChatMessage, ChatOptions, ChatResult, Provider, StopReason, StreamEvent, ToolSchema } from "../types.js";
 
-/** 归一化 OpenAI 的 finish_reason。 */
+/** 归一化 OpenAI 的 finish_reason；tool_calls 就是"模型想调工具"（Anthropic 叫 tool_use）。 */
 function normalizeStop(finishReason: string | null | undefined): StopReason {
   if (finishReason === "stop") return "stop";
   if (finishReason === "length") return "length";
+  if (finishReason === "tool_calls") return "tool_use";
   return "other";
+}
+
+/** 工具说明书出站翻译：中立 ToolSchema → OpenAI 的 function 包装。 */
+function toWireTools(tools: ToolSchema[]): object[] {
+  return tools.map((t) => ({
+    type: "function",
+    function: { name: t.name, description: t.description, parameters: t.parameters },
+  }));
 }
 
 /** 把中立消息翻译成 OpenAI 协议的消息数组；system 独立字段落回数组首位。 */
@@ -25,6 +34,24 @@ function toWireMessages(messages: ChatMessage[], system?: string): object[] {
   if (system) wire.push({ role: "system", content: system });
   for (const m of messages) {
     // 只回传 content：reasoning 是瞬时展示字段，绝不回传下一轮（M1 实证的坑）
+    if (m.role === "tool") {
+      // 工具结果：OpenAI 的规矩是独立消息 + tool_call_id 对号
+      wire.push({ role: "tool", tool_call_id: m.toolCallId ?? "", content: m.content });
+      continue;
+    }
+    if (m.toolCalls) {
+      // 带工具调用的 assistant 消息：args（对象）在这里变回 JSON 字符串
+      wire.push({
+        role: "assistant",
+        content: m.content,
+        tool_calls: m.toolCalls.map((c) => ({
+          id: c.id,
+          type: "function",
+          function: { name: c.name, arguments: JSON.stringify(c.args) },
+        })),
+      });
+      continue;
+    }
     wire.push({ role: m.role, content: m.content });
   }
   return wire;
@@ -62,11 +89,22 @@ export function createOpenAIProvider(cfg: AppConfig): Provider {
     name: "openai",
 
     async chat(messages, opts) {
-      const body = { model: cfg.model, messages: toWireMessages(messages, opts?.system) };
+      const body = {
+        model: cfg.model,
+        messages: toWireMessages(messages, opts?.system),
+        ...(opts?.tools ? { tools: toWireTools(opts.tools) } : {}),
+      };
       const resp = await withRetry(() => fetchResponse(body, opts?.signal), 3, "chat");
 
       const data = (await resp.json()) as {
-        choices?: { message?: { content?: string; reasoning_content?: string }; finish_reason?: string }[];
+        choices?: {
+          message?: {
+            content?: string;
+            reasoning_content?: string;
+            tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[];
+          };
+          finish_reason?: string;
+        }[];
         usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
 
@@ -81,6 +119,20 @@ export function createOpenAIProvider(cfg: AppConfig): Provider {
         stopReason: normalizeStop(choice.finish_reason),
       };
       if (choice.message?.reasoning_content) result.reasoning = choice.message.reasoning_content;
+      // 工具调用入站翻译：arguments（JSON 字符串）parse 成对象。
+      // parse 失败不炸——模型偶尔会产出坏 JSON，降级成空参数让上层靠
+      // "工具报错→模型重试"的自愈机制处理（agent 循环天生能消化这种脏数据）
+      if (choice.message?.tool_calls?.length) {
+        result.toolCalls = choice.message.tool_calls.map((c) => {
+          let args: Record<string, unknown> = {};
+          try {
+            args = JSON.parse(c.function?.arguments ?? "{}") as Record<string, unknown>;
+          } catch {
+            args = {};
+          }
+          return { id: c.id ?? "", name: c.function?.name ?? "", args };
+        });
+      }
       // 只信 prompt/completion 两个字段；MiMo 的 reasoning_tokens=0 怪癖（NOTES）证明细分字段不可全信
       if (data.usage?.prompt_tokens !== undefined && data.usage.completion_tokens !== undefined) {
         result.usage = { inputTokens: data.usage.prompt_tokens, outputTokens: data.usage.completion_tokens };
@@ -89,6 +141,8 @@ export function createOpenAIProvider(cfg: AppConfig): Provider {
     },
 
     async chatStream(messages, onEvent, opts) {
+      // 阶段 1 范围：流式暂不支持 tool_calls 增量（要累积 delta 再拼参数，复杂度高），
+      // 工具轮次一律走非流式 chat()。流式+工具作为后续可选支线。
       // stream_options.include_usage：请求服务端在最后一个 chunk 里带上 usage
       //（MiMo 是否支持实测见 NOTES；不支持就整体缺省，类型上已允许）
       const body = {

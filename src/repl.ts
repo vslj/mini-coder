@@ -1,9 +1,10 @@
 /**
  * repl.ts —— REPL 主循环：用户-facing 的一切。
  *
- * 交互模型：
+ * 交互模型（阶段 1 起两种模式并存，/tools 切换）：
  *   > 用户输入 ──→ 内建命令？（硬编码 if/else，命令系统是阶段 4 的事）
- *              └─→ chatStream 边流边画 → assistant 消息入历史 → 回到提示符
+ *              ├─→ 纯聊天模式：chatStream 边流边画（阶段 0 的形态）
+ *              └─→ agent 模式：runAgentTurn 工具循环（非流式，画工具活动）
  *
  * 两个精心处理过的点（都是真实会踩的坑）：
  *  1. 流式期间 rl.pause()：readline 若继续监听，用户按键回显会打碎打字机画面；
@@ -13,16 +14,26 @@
  */
 
 import * as readline from "node:readline/promises";
+import { runAgentTurn } from "./agent.js";
 import { createRenderer } from "./render.js";
+import type { ToolRegistry } from "./tools.js";
 import type { ChatMessage, Provider, Usage } from "./types.js";
+
+// ANSI 色码（与 render.ts 同款）：agent 模式的工具活动行用暗淡色，跟正文区分
+const DIM = "\x1b[2m";
+const RESET = "\x1b[0m";
 
 export interface ReplOptions {
   /** 可热切换的 provider 表（键 = provider 名）。 */
   providers: Record<string, Provider>;
   initial: string;
+  /** 工具注册表；提供时 agent 模式可用（默认开启）。 */
+  tools?: ToolRegistry;
+  /** 顶层 system prompt（两种模式共用）。 */
+  system?: string;
 }
 
-export async function startRepl({ providers, initial }: ReplOptions): Promise<void> {
+export async function startRepl({ providers, initial, tools, system }: ReplOptions): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   // 会话状态：纯内存，不持久化（持久化/存档是阶段 2 的 agent 场景需求）
@@ -31,6 +42,8 @@ export async function startRepl({ providers, initial }: ReplOptions): Promise<vo
   const totalUsage: Usage = { inputTokens: 0, outputTokens: 0 };
   let usageCount = 0; // 有多少轮真的拿到了 usage（MiMo 流式拿不到，见 NOTES）
   let currentAbort: AbortController | null = null;
+  // agent 模式默认开（有工具就用）；/tools off 可切回纯聊天对照
+  let agentMode = tools !== undefined;
 
   // Ctrl+C 两态。Windows 上有个隐蔽机制：readline 创建后终端进入"生模式"
   // （raw mode），Ctrl+C 不再产生进程级 SIGINT，而是变成 \x03 字符交给
@@ -100,8 +113,25 @@ export async function startRepl({ providers, initial }: ReplOptions): Promise<vo
       }
       continue;
     }
+    if (line === "/tools" || line.startsWith("/tools ")) {
+      if (!tools) {
+        console.log("(本次启动没有注册任何工具)");
+        continue;
+      }
+      const arg = line.slice("/tools".length).trim();
+      if (arg === "on" || arg === "off") {
+        agentMode = arg === "on";
+        console.log(`（agent 模式已${agentMode ? "开启" : "关闭"}——${agentMode ? "工具循环" : "纯聊天流式"}）`);
+        continue;
+      }
+      console.log(`已注册工具（agent 模式：${agentMode ? "开" : "关"}）:`);
+      for (const t of tools.list()) console.log(`  ${t.name} —— ${t.description}`);
+      continue;
+    }
     if (line === "/help") {
-      console.log("/exit 退出 | /clear 清空历史 | /usage 查看累计 token | /provider [名称] 切换协议通道");
+      console.log(
+        "/exit 退出 | /clear 清空历史 | /usage 查看累计 token | /provider [名称] 切换协议通道 | /tools [on|off] 工具列表/agent 模式开关",
+      );
       continue;
     }
     if (line.startsWith("/")) {
@@ -109,7 +139,7 @@ export async function startRepl({ providers, initial }: ReplOptions): Promise<vo
       continue;
     }
 
-    // ---- 正常对话 ----
+    // ---- 正常对话（两种模式共用同一份 messages 历史）----
     const provider = providers[currentName]!;
     messages.push({ role: "user", content: line });
 
@@ -120,21 +150,57 @@ export async function startRepl({ providers, initial }: ReplOptions): Promise<vo
     let partial = ""; // 中断时记录已流出的正文，别让半截回答凭空消失
 
     try {
-      const result = await provider.chatStream(
-        messages,
-        (e) => {
-          if (e.type === "text") partial += e.text;
-          renderer.write(e);
-          if (e.type === "usage") {
-            totalUsage.inputTokens += e.usage.inputTokens;
-            totalUsage.outputTokens += e.usage.outputTokens;
-            usageCount++;
-          }
-        },
-        { signal: currentAbort.signal },
-      );
-      // 入历史的 assistant 消息只带 content（reasoning 是瞬时字段，类型上就带不进历史）
-      messages.push({ role: "assistant", content: result.content });
+      if (agentMode && tools) {
+        // ---- agent 模式：非流式工具循环，画的是"工具活动"而不是打字机 ----
+        const result = await runAgentTurn({
+          provider,
+          messages,
+          tools,
+          system,
+          signal: currentAbort.signal,
+          hooks: {
+            onToolCall(name, args) {
+              process.stdout.write(`${DIM}⚙ ${name}(${JSON.stringify(args)})`);
+            },
+            onToolResult(_name, ok, content) {
+              // 结果截断展示：完整内容已经进历史喂给模型了，终端只画个概要
+              const shown = content.length > 100 ? `${content.slice(0, 100)}…` : content;
+              process.stdout.write(` ${RESET}${ok ? "→" : "✗"} ${shown}\n`);
+            },
+          },
+        });
+        if (result.usage) {
+          totalUsage.inputTokens += result.usage.inputTokens;
+          totalUsage.outputTokens += result.usage.outputTokens;
+          usageCount++;
+        }
+        // agent 模式第一版不画思维链（reasoning 属于"刚刚这轮"的展示字段，
+        // AgentTurnResult 也没有透出它）——保持循环输出聚焦在工具活动与回答上
+        if (result.stopped === "answer") {
+          console.log(result.content);
+        } else {
+          console.log(
+            `[已达 ${result.rounds} 轮上限，强制停止——模型可能在工具调用里打转，试试换个问法或 /clear]`,
+          );
+        }
+      } else {
+        // ---- 纯聊天模式：阶段 0 的流式打字机 ----
+        const result = await provider.chatStream(
+          messages,
+          (e) => {
+            if (e.type === "text") partial += e.text;
+            renderer.write(e);
+            if (e.type === "usage") {
+              totalUsage.inputTokens += e.usage.inputTokens;
+              totalUsage.outputTokens += e.usage.outputTokens;
+              usageCount++;
+            }
+          },
+          { signal: currentAbort.signal, system },
+        );
+        // 入历史的 assistant 消息只带 content（reasoning 是瞬时字段，类型上就带不进历史）
+        messages.push({ role: "assistant", content: result.content });
+      }
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") {
         // 用户中断：有半截回答就入历史（标注截断），没有就撤回这条提问

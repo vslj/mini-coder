@@ -2,7 +2,7 @@
 
 仿写极简版 Claude Code 的学习项目：**不依赖任何 SDK / 框架**，从裸 HTTP 请求开始，把 LLM API、流式、provider 抽象、Agent 循环逐层亲手写一遍。配套系列博客（亲身实践 → 原理 → mini 实现）。
 
-当前进度：**阶段 0（地基）** —— provider 抽象层（OpenAI 兼容 + Anthropic 原生双协议）+ SSE 流式 + 对话 REPL。
+当前进度：**阶段 1（工具框架）** —— 在阶段 0 的 provider 层 + 流式 + REPL 之上，加入工具 schema、执行器与 agent 主循环（`/tools` 命令在"agent 模式/纯聊天"间切换）。
 
 ## 运行
 
@@ -12,23 +12,26 @@ cp .env.example .env   # 填入你的 key 与端点（.env 已 gitignore）
 pnpm dev               # 开发运行（tsx 免编译）
 ```
 
-REPL 内命令：`/help` `/exit` `/clear` `/usage` `/provider [openai|anthropic]`
+REPL 内命令：`/help` `/exit` `/clear` `/usage` `/provider [openai|anthropic]` `/tools [on|off]`
 
 ```bash
 pnpm build && pnpm start   # 构建产物运行（tsc → dist/）
 ```
 
-## 结构（阶段 0）
+## 结构（阶段 1）
 
 ```
 src/
 ├── cli.ts               # 入口装配
 ├── config.ts            # .env + 环境变量 → AppConfig（key 全程脱敏）
-├── types.ts             # 中立消息格式 + Provider 接口（抽象层核心）
+├── types.ts             # 中立消息/工具格式 + Provider 接口（抽象层核心）
 ├── errors.ts            # ProviderError 结构化错误 + 指数退避重试
 ├── sse.ts               # 协议无关 SSE 行解析器
 ├── render.ts            # 流式终端渲染（暗淡思维链 → 正文）
-├── repl.ts              # REPL 主循环
+├── repl.ts              # REPL 主循环（纯聊天流式 / agent 模式两种形态）
+├── agent.ts             # agent 主循环（想 → 做 → 看结果 → 再想，回合原子性 + 轮数上限）
+├── tools.ts             # 工具框架：注册表 + 执行器（错误脱敏后喂回模型自愈）
+├── tools-demo.ts        # 阶段 1 演示工具（get_time / calculate）
 └── providers/
     ├── index.ts         # 工厂
     ├── openai.ts        # OpenAI 兼容协议分支

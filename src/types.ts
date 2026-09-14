@@ -17,16 +17,49 @@
  *   provider 内部，调用方完全无感。
  */
 
-export type Role = "user" | "assistant";
+/**
+ * 工具调用的中立形状。两种协议在这里分歧很明显（阶段 1 实验①实测）：
+ *   - OpenAI：assistant 消息带 tool_calls 数组，arguments 是 **JSON 字符串**；
+ *   - Anthropic：content 数组里混着 tool_use 块，input 直接是 **JSON 对象**。
+ * 中立层统一成对象——字符串与对象之争是 provider 内部的事，调用方无感。
+ */
+export interface ToolCall {
+  /** 这次调用的唯一 id，结果回传时靠它对上号。 */
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+}
+
+/** 工具说明书：告诉模型"有这么个工具、怎么用"。parameters 是标准 JSON Schema。 */
+export interface ToolSchema {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export type Role = "user" | "assistant" | "tool";
 
 export interface ChatMessage {
   role: Role;
   content: string;
   /**
+   * assistant 发起工具调用时带上（user/tool 消息永远没有）。
+   * 刻意不把 content 改成块数组：阶段 0 的纯文本对话一个字都不用动，
+   * "带工具的 assistant 消息"只是多了一个可选字段。
+   */
+  toolCalls?: ToolCall[];
+  /**
+   * role === "tool" 时必填：这条结果对应哪一次调用。
+   * OpenAI 用独立消息 + tool_call_id 对号；Anthropic 塞进下一条 user 消息，
+   * 对号字段由 anthropic.ts 内部翻译。
+   */
+  toolCallId?: string;
+  /**
    * 思维链原文，仅用于"刚刚这一轮"的展示。
    * 它是可选项，而且历史回传时只取 content——用类型系统把
    * "reasoning 不回传下一轮"变成结构性约束，而不是注释里的提醒。
-   * （M1 实证：DeepSeek/MiMo 的 reasoning 不该回传，服务端宽容忽略不可依赖）
+   * （M1 实证：DeepSeek/MiMo 的 reasoning 不该回传，服务端宽容忽略不可依赖；
+   *   阶段 1 实验①再证：/anthropic 端点剥掉 thinking 块回传也照常接受）
    */
   reasoning?: string;
 }
@@ -36,12 +69,14 @@ export interface Usage {
   outputTokens: number;
 }
 
-/** 停止原因已归一化：OpenAI 的 stop/length、Anthropic 的 end_turn/max_tokens 各归其位。 */
-export type StopReason = "stop" | "length" | "other";
+/** 停止原因已归一化："tool_use" 表示模型想调工具（OpenAI 的 tool_calls、Anthropic 的 tool_use 各归其位）。 */
+export type StopReason = "stop" | "length" | "tool_use" | "other";
 
 export interface ChatResult {
   content: string;
   reasoning?: string;
+  /** 模型想调的工具（stopReason === "tool_use" 时出现）；agent 主循环的入口信号。 */
+  toolCalls?: ToolCall[];
   /** 流式下 MiMo 可能不给 usage（实测见 NOTES），类型上允许缺省。 */
   usage?: Usage;
   stopReason: StopReason;
@@ -50,6 +85,8 @@ export interface ChatResult {
 export interface ChatOptions {
   /** 顶层 system prompt，两个 provider 各自落到协议的正确位置。 */
   system?: string;
+  /** 本轮可用的工具说明书；不传 = 纯聊天（阶段 0 的形态）。 */
+  tools?: ToolSchema[];
   /** 中断通道：REPL 的 Ctrl+C 会触发 abort，fetch 收到 signal 就停。 */
   signal?: AbortSignal;
 }
