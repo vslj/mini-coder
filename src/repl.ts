@@ -213,9 +213,14 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
       }
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") {
-        // 用户中断：有半截回答就入历史（标注截断），没有就撤回这条提问
+        // 用户中断：两种模式语义不同
         process.stdout.write("\n[已中断]\n");
-        if (partial) {
+        if (agentMode && tools) {
+          // agent 模式：进度保留在历史（agent.ts 只回滚真错误）——
+          // 说"继续"模型就能接着干，这里绝不能 pop
+          process.stdout.write(`[任务进度已保留，直接说"继续"即可接着做]\n`);
+        } else if (partial) {
+          // 纯聊天模式：有半截回答就入历史（标注截断），没有就撤回这条提问
           messages.push({ role: "assistant", content: `${partial}\n[回答被用户中断]` });
         } else {
           messages.pop();

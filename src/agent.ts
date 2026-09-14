@@ -4,9 +4,9 @@
  * 原型是 learning/m3/agent.mjs（M3 毕业实验的 ~25 行裸循环），
  * 正式版多了三样工程化的东西：
  *
- *  1. 回合原子性：一轮对话要么完整完成，要么在出错/中断时把历史回滚到
- *     回合开始前——残缺的中间状态（问了一半的工具结果）绝不能留在历史里，
- *     否则下一轮请求就是"占位的 tool_call 没有结果"，双协议都会报错；
+ *  1. 回合原子性：真错误（网络错等）发生时把历史回滚到回合开始前——
+ *     失败的回合不留残迹。用户 Ctrl+C 例外：中断时刻的历史总是协议合法的，
+ *     进度保留（见 catch 处的注释），"继续"能接得上；
  *  2. 轮数上限：不设上限的循环，模型钻牛角尖时就是无底的 token 黑洞（M5 教训）；
  *  3. 钩子（hooks）：循环通过回调报告"正在调什么工具、结果如何"，
  *     渲染留在 REPL 侧——核心循环不掺任何终端输出，教学和测试都干净。
@@ -121,9 +121,17 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<AgentTurnRes
     // 但没有最终回答——由 REPL 提示用户
     return { content: "", stopped: "max_rounds", rounds: maxRounds, usage: totalUsage };
   } catch (e) {
-    // 回合原子性：任何失败（网络错、用户 Ctrl+C）都把历史回滚到回合开始前。
-    // 中断时已有的工具往返虽然"白做了"，但残缺状态留在历史里危害更大
-    messages.length = startLen;
+    const aborted = e instanceof Error && e.name === "AbortError";
+    if (!aborted) {
+      // 真错误（网络错等）：回滚到回合开始前，保持历史干净——
+      // 失败的回合不留残迹，下一轮从头再来
+      messages.length = startLen;
+    }
+    // 用户 Ctrl+C：进度保留在历史里。Ctrl+C 只能打断 provider 的网络调用，
+    // 而打断那一刻的历史恰好总是协议合法的（要么停在"提问还没答"，
+    // 要么停在"工具结果已回填、模型还没接话"）——下一条消息来了模型能接着干。
+    // 这是阶段 0 实证过的"中断不丢上下文"哲学（v0.3 用户实测暴露了
+    // 全量回滚的代价：被中断的任务模型彻底失忆，"继续"无从接起）
     throw e;
   }
 }

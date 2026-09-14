@@ -73,6 +73,19 @@ function toWireMessages(messages: ChatMessage[]): object[] {
       wire.push({ role: "assistant", content: blocks });
       continue;
     }
+    // Anthropic 要求消息严格 user/assistant 交替（OpenAI 无所谓）。
+    // agent 回合被用户中断后，历史里会出现连续 user 消息（没答完的提问 +
+    // 新提问、或工具结果块后跟新提问）——在这里合并成一条，协议差异照例吸收
+    const last = wire[wire.length - 1] as { role?: string; content?: unknown } | undefined;
+    if (m.role === "user" && last?.role === "user") {
+      if (typeof last.content === "string") {
+        last.content += `\n${m.content}`;
+      } else {
+        // 前一条是装工具结果块的 user 消息：文本块追加在工具结果后面
+        (last.content as object[]).push({ type: "text", text: m.content });
+      }
+      continue;
+    }
     wire.push({ role: m.role, content: m.content });
   }
   return wire;
