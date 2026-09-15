@@ -65,6 +65,20 @@ export class ToolRegistry {
   }
 
   /**
+   * 只读子表（阶段 3 计划模式的硬约束底座）：滤掉所有写类工具，返回新表。
+   * 计划模式下模型拿到的工具清单里根本没有写操作——"先计划再动手"
+   * 不靠提示词恳求，靠让写工具物理不存在。实验②实证了为什么要这样：
+   * system 明说"先说明计划再动手"，模型照样一个字不提（软约束的选择性遵循）；
+   * 而写工具不在 schema 里时，模型就算幻觉出 write_file，执行器也只会回
+   * "未知工具"，错误喂回后自愈机制接得住。
+   */
+  readOnlyView(): ToolRegistry {
+    const view = new ToolRegistry();
+    for (const t of this.list()) if (!t.needsApproval) view.register(t);
+    return view;
+  }
+
+  /**
    * 执行一个工具调用。永远 resolve 不 reject——失败也是"结果"，
    * 由调用方（agent 循环）把 content 原样回传给模型。
    */

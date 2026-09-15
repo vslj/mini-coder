@@ -39,7 +39,13 @@ export interface AgentTurnOptions {
   messages: ChatMessage[];
   tools: ToolRegistry;
   system?: string;
-  /** 轮数上限，默认 8（M3 实验同款默认值）。 */
+  /**
+   * 轮数上限，默认 16。阶段 3 实验②的教训：默认 8 会把健康的
+   * "摸目录→逐个读→写→读回核对→汇报"流程掐死在汇报前——一次串行
+   * 工具调用就烧一轮，多步任务 8 轮刚好吃满。上限的尺寸要跟着
+   * system 指令要求的工作量走，不是越小越安全（守护机制杀死了它
+   * 本要保护的东西）。
+   */
   maxRounds?: number;
   /**
    * 权限门：needsApproval 的工具执行前要先过这里。
@@ -62,7 +68,7 @@ export interface AgentTurnResult {
 
 export async function runAgentTurn(opts: AgentTurnOptions): Promise<AgentTurnResult> {
   const { provider, messages, tools, system, signal, hooks, gate } = opts;
-  const maxRounds = opts.maxRounds ?? 8;
+  const maxRounds = opts.maxRounds ?? 16;
   const startLen = messages.length; // 回合原子性的锚点：出错就回滚到这里
   const totalUsage: Usage = { inputTokens: 0, outputTokens: 0 };
 

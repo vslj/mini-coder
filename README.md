@@ -2,7 +2,7 @@
 
 仿写极简版 Claude Code 的学习项目：**不依赖任何 SDK / 框架**，从裸 HTTP 请求开始，把 LLM API、流式、provider 抽象、Agent 循环逐层亲手写一遍。配套系列博客（亲身实践 → 原理 → mini 实现）。
 
-当前进度：**阶段 2（文件工具 + 安全）** —— 四个真实文件工具（read/write/list/edit）+ 路径逃逸防护 + 敏感文件闸 + 写操作权限确认（y/n/a，带 diff 预览）。阶段 1：工具框架 + agent 主循环（`/tools` 切换 agent/纯聊天模式）。
+当前进度：**阶段 3（反思与计划）** —— `/plan` 计划模式（只读侦察 → 计划批准 → 全量工具执行，"先计划再动手"由程序侧硬约束保障）+ 轮数上限校准。此前：阶段 2 文件工具 + 安全（read/write/list/edit、路径逃逸防护、敏感文件闸、y/n/a 权限确认带 diff 预览）；阶段 1 工具框架 + agent 主循环（`/tools` 切换 agent/纯聊天模式）。
 
 ## 运行
 
@@ -12,7 +12,7 @@ cp .env.example .env   # 填入你的 key 与端点（.env 已 gitignore）
 pnpm dev               # 开发运行（tsx 免编译）
 ```
 
-REPL 内命令：`/help` `/exit` `/clear` `/usage` `/provider [openai|anthropic]` `/tools [on|off]`
+REPL 内命令：`/help` `/exit` `/clear` `/usage` `/provider [openai|anthropic]` `/tools [on|off]` `/plan <任务>`
 
 ```bash
 pnpm build && pnpm start   # 构建产物运行（tsc → dist/）

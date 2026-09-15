@@ -14,7 +14,7 @@
  */
 
 import * as readline from "node:readline/promises";
-import { runAgentTurn } from "./agent.js";
+import { runAgentTurn, type AgentTurnResult } from "./agent.js";
 import { createInteractiveGate, type PermissionGate } from "./permissions.js";
 import { createRenderer } from "./render.js";
 import type { ToolRegistry } from "./tools.js";
@@ -23,6 +23,13 @@ import type { ChatMessage, Provider, Usage } from "./types.js";
 // ANSI 色码（与 render.ts 同款）：agent 模式的工具活动行用暗淡色，跟正文区分
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
+
+/** 计划模式的 system 补充段：/plan 时拼在主 system 后面（阶段 3）。 */
+const PLAN_MODE_SYSTEM =
+  "〔计划模式〕你现在处于计划模式：工具清单里只有只读工具（读文件、列目录等），" +
+  "任何写操作都不可用。请先用只读工具了解与任务相关的情况，然后输出一份简短的" +
+  "行动计划（做什么、改哪些文件、按什么顺序），不要执行任何修改。" +
+  "计划输出后本回合即结束，计划会交给用户批准。";
 
 export interface ReplOptions {
   /** 可热切换的 provider 表（键 = provider 名）。 */
@@ -47,6 +54,9 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
   let agentMode = tools !== undefined;
   // 权限门：写类工具的 y/n/a 确认。挂在 rl 上——确认输入就是普通的一行输入
   const gate: PermissionGate | undefined = tools ? createInteractiveGate(rl) : undefined;
+  // 计划批准框（/plan 流程）的挂起状态——Ctrl+C 巧门与确认弹窗同款
+  let planPending = false;
+  let planCancelled = false;
 
   // Ctrl+C 两态。Windows 上有个隐蔽机制：readline 创建后终端进入"生模式"
   // （raw mode），Ctrl+C 不再产生进程级 SIGINT，而是变成 \x03 字符交给
@@ -63,6 +73,13 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
   process.on("SIGINT", () => {
     // 优先级 1：确认弹窗挂起中——^C = 拒绝当前操作，不是退出
     if (gate?.cancelPending()) return;
+    // 优先级 2：计划批准框挂起中——^C = 放弃计划，不是退出（同款巧门）
+    if (planPending) {
+      planCancelled = true;
+      planPending = false;
+      rl.write("n\n"); // 让挂起的批准输入按"放弃"结算（下面靠 planCancelled 识别真相）
+      return;
+    }
     if (currentAbort) {
       currentAbort.abort(); // 流式中：中断请求，回到提示符
     } else {
@@ -78,6 +95,49 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
   // 流式态 Ctrl+C 的中断逻辑已并入上面的主 SIGINT 处理器（优先级：确认弹窗 > 请求中断 > 退出）
 
   const renderer = createRenderer();
+
+  /**
+   * 跑一个 agent 回合并负责"人看的部分"：画工具活动、累计 usage、
+   * 按停止原因收尾。agent 模式与计划模式的回合都走这一个入口。
+   */
+  const agentTurnWithUi = async (activeTools: ToolRegistry, systemExtra?: string): Promise<AgentTurnResult> => {
+    const result = await runAgentTurn({
+      provider: providers[currentName]!,
+      messages,
+      tools: activeTools,
+      system: systemExtra ? `${system}\n${systemExtra}` : system,
+      gate,
+      signal: currentAbort!.signal,
+      hooks: {
+        onToolCall(name, args) {
+          // 参数截断展示：write_file 的 content 参数可能几千字，终端只画个开头
+          const shown = JSON.stringify(args);
+          process.stdout.write(`${DIM}⚙ ${name}(${shown.length > 120 ? `${shown.slice(0, 120)}…` : shown})`);
+        },
+        onToolResult(_name, ok, content) {
+          // 结果截断展示：完整内容已经进历史喂给模型了，终端只画个概要
+          const brief = content.length > 100 ? `${content.slice(0, 100)}…` : content;
+          process.stdout.write(` ${RESET}${ok ? "→" : "✗"} ${brief}\n`);
+        },
+      },
+    });
+    if (result.usage) {
+      totalUsage.inputTokens += result.usage.inputTokens;
+      totalUsage.outputTokens += result.usage.outputTokens;
+      usageCount++;
+    }
+    if (result.stopped === "answer") {
+      console.log(result.content);
+    } else if (result.stopped === "cancelled") {
+      // 确认弹窗里的 Ctrl+C：与流式中断同一套话术——进度保留，"继续"能接上
+      console.log(`[回合已被 Ctrl+C 中止，任务进度已保留，直接说"继续"即可接着做]`);
+    } else {
+      console.log(
+        `[已达 ${result.rounds} 轮上限，强制停止——模型可能在工具调用里打转，试试换个问法或 /clear]`,
+      );
+    }
+    return result;
+  };
 
   console.log(`mini-coder 就绪 —— 当前 provider: ${currentName}，输入 /help 查看命令`);
 
@@ -135,20 +195,32 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
       console.log("（🔒 = 写类工具，执行前需要确认）");
       continue;
     }
+    // 计划模式（阶段 3）：参数校验在这里，执行落在底部的执行段，
+    // 与普通输入共用同一套 try/catch/finally（错误与中断语义不另起炉灶）
+    const isPlan = line === "/plan" || line.startsWith("/plan ");
+    const planTask = isPlan ? line.slice("/plan".length).trim() : "";
+    if (isPlan && !tools) {
+      console.log("(本次启动没有注册任何工具，计划模式不可用)");
+      continue;
+    }
+    if (isPlan && !planTask) {
+      console.log("用法：/plan <任务描述> —— 模型先用只读工具摸清情况并给出计划，你批准后才动手");
+      continue;
+    }
     if (line === "/help") {
       console.log(
-        "/exit 退出 | /clear 清空历史 | /usage 查看累计 token | /provider [名称] 切换协议通道 | /tools [on|off] 工具列表/agent 模式开关",
+        "/exit 退出 | /clear 清空历史 | /usage 查看累计 token | /provider [名称] 切换协议通道 | /tools [on|off] 工具列表/agent 模式开关 | /plan <任务> 计划模式（只读侦察→批准→执行）",
       );
       continue;
     }
-    if (line.startsWith("/")) {
+    if (line.startsWith("/") && !isPlan) {
       console.log(`未知命令 ${line.split(" ")[0]}，/help 查看可用命令`);
       continue;
     }
 
-    // ---- 正常对话（两种模式共用同一份 messages 历史）----
+    // ---- 正常对话（纯聊天 / agent / 计划模式共用同一份 messages 历史）----
     const provider = providers[currentName]!;
-    messages.push({ role: "user", content: line });
+    messages.push({ role: "user", content: isPlan ? planTask : line });
 
     rl.pause(); // 暂停输入监听：流式输出期间不能让按键回显打碎画面
     // 切回"熟模式"：让 Ctrl+C 重新成为进程级信号（生模式下它是滞留缓冲区的 \x03）
@@ -157,45 +229,41 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
     let partial = ""; // 中断时记录已流出的正文，别让半截回答凭空消失
 
     try {
-      if (agentMode && tools) {
-        // ---- agent 模式：非流式工具循环，画的是"工具活动"而不是打字机 ----
-        const result = await runAgentTurn({
-          provider,
-          messages,
-          tools,
-          system,
-          gate,
-          signal: currentAbort.signal,
-          hooks: {
-            onToolCall(name, args) {
-              // 参数截断展示：write_file 的 content 参数可能几千字，终端只画个开头
-              const shown = JSON.stringify(args);
-              process.stdout.write(`${DIM}⚙ ${name}(${shown.length > 120 ? `${shown.slice(0, 120)}…` : shown})`);
-            },
-            onToolResult(_name, ok, content) {
-              // 结果截断展示：完整内容已经进历史喂给模型了，终端只画个概要
-              const brief = content.length > 100 ? `${content.slice(0, 100)}…` : content;
-              process.stdout.write(` ${RESET}${ok ? "→" : "✗"} ${brief}\n`);
-            },
-          },
-        });
-        if (result.usage) {
-          totalUsage.inputTokens += result.usage.inputTokens;
-          totalUsage.outputTokens += result.usage.outputTokens;
-          usageCount++;
-        }
-        // agent 模式第一版不画思维链（reasoning 属于"刚刚这轮"的展示字段，
-        // AgentTurnResult 也没有透出它）——保持循环输出聚焦在工具活动与回答上
-        if (result.stopped === "answer") {
-          console.log(result.content);
-        } else if (result.stopped === "cancelled") {
-          // 确认弹窗里的 Ctrl+C：与流式中断同一套话术——进度保留，"继续"能接上
-          console.log(`[回合已被 Ctrl+C 中止，任务进度已保留，直接说"继续"即可接着做]`);
+      if (isPlan) {
+        // ---- 计划模式：阶段 3 的核心机制，实验②教训落成硬约束 ----
+        // 提示词要求"先亮计划"被模型完全无视（软约束的选择性遵循），
+        // 那就让"先计划"成为它唯一能干的事：这一回合的工具表换成只读
+        // 子表，写操作从 schema 里物理消失；模型自然停下时输出的就是计划。
+        console.log(`${DIM}〔计划模式：只读工具可用——先摸上下文，再给计划〕${RESET}`);
+        const planResult = await agentTurnWithUi(tools!, PLAN_MODE_SYSTEM);
+        if (planResult.stopped !== "answer" || !planResult.content.trim()) {
+          // 没产出计划（轮数用尽/被中止/空回答）：任务还在历史里，用户可补充信息重试
+          console.log("（计划模式没有产出计划——看上面的停止原因；任务仍在历史里，可补充信息后重试）");
         } else {
-          console.log(
-            `[已达 ${result.rounds} 轮上限，强制停止——模型可能在工具调用里打转，试试换个问法或 /clear]`,
-          );
+          // 批准框：与确认弹窗同一套 Ctrl+C 巧门（合成 n 结算 + 改写回显行）
+          planPending = true;
+          planCancelled = false;
+          rl.resume(); // agent 回合期间 readline 处于暂停态，批准输入要临时接管
+          const ans = (await rl.question("按此计划执行？(y=按计划执行 / 其他=放弃) ")).trim().toLowerCase();
+          rl.pause();
+          planPending = false;
+          if (planCancelled) {
+            process.stdout.write("\x1b[1A\x1b[2K（Ctrl+C —— 计划未执行）\n");
+            messages.push({ role: "user", content: "计划未获批准，等待用户的新指示。" });
+          } else if (ans === "y") {
+            // 计划作为 assistant 消息已在历史里，模型执行时看得见自己许诺过什么——
+            // 这正是"先分析后动手"能被检验的原因：说好的计划就摆在上下文里
+            messages.push({ role: "user", content: "计划已获批准，请按计划执行。" });
+            console.log(`${DIM}〔执行模式：全量工具可用〕${RESET}`);
+            await agentTurnWithUi(tools!);
+          } else {
+            console.log("（计划未执行——计划保留在历史里，可以直接说修改意见让我调整）");
+            messages.push({ role: "user", content: "计划未获批准，等待用户的新指示。" });
+          }
         }
+      } else if (agentMode && tools) {
+        // ---- agent 模式：非流式工具循环，画的是"工具活动"而不是打字机 ----
+        await agentTurnWithUi(tools);
       } else {
         // ---- 纯聊天模式：阶段 0 的流式打字机 ----
         const result = await provider.chatStream(
@@ -218,8 +286,8 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
       if (e instanceof Error && e.name === "AbortError") {
         // 用户中断：两种模式语义不同
         process.stdout.write("\n[已中断]\n");
-        if (agentMode && tools) {
-          // agent 模式：进度保留在历史（agent.ts 只回滚真错误）——
+        if (isPlan || (agentMode && tools)) {
+          // agent/计划模式：进度保留在历史（agent.ts 只回滚真错误）——
           // 说"继续"模型就能接着干，这里绝不能 pop
           process.stdout.write(`[任务进度已保留，直接说"继续"即可接着做]\n`);
         } else if (partial) {
