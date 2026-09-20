@@ -182,93 +182,142 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
     return result;
   };
 
+  // ---- 命令表（阶段 4 重构）----
+  // 为什么要从 if/else 换成表：命令长到 9 个时，分发段近 80 行，而且新命令
+  // 要同时改分发和 /help 两处——两处不同步，/help 就在向用户撒谎。表把
+  // "加命令"变成加一个条目，/help 从表自动生成（单一事实来源）。
+  // run 的三种去向：
+  //   exit        = 退出 REPL；
+  //   handled     = 处理完毕，回到提示符；
+  //   fallthrough = 命令只是"修饰"了这条输入（目前只有 /plan），落到下面的对话段，
+  //                 与普通输入共用同一套 try/catch/finally（错误与中断语义不另起炉灶）
+  type CommandOutcome = "exit" | "handled" | "fallthrough";
+  interface Command {
+    help: string;
+    run(arg: string): CommandOutcome | Promise<CommandOutcome>;
+  }
+  let planTask: string | null = null; // /plan 校验通过后暂存任务描述，fallthrough 给对话段消费
+  const commands: Record<string, Command> = {
+    "/exit": {
+      help: "退出",
+      run: () => {
+        rl.close();
+        console.log("(再见)");
+        return "exit";
+      },
+    },
+    "/clear": {
+      help: "清空历史",
+      run: () => {
+        messages.length = 0; // "失忆"的本质：客户端清空自己的数组（M1 的核心观察）
+        console.log("(历史已清空)");
+        return "handled";
+      },
+    },
+    "/usage": {
+      help: "查看累计 token 与历史估算",
+      run: () => {
+        console.log(
+          `本会话累计 ${usageCount} 轮有账：输入 ${totalUsage.inputTokens} + 输出 ${totalUsage.outputTokens} tokens；` +
+            `当前历史估算 ≈${estimateHistory(messages)} tokens（两本账：真实账看端点脸色，估算账自己算，压缩决策只认后者）` +
+            (usageCount === 0 ? "（流式下 MiMo 不回 usage，数字为空属正常，见 NOTES）" : ""),
+        );
+        return "handled";
+      },
+    },
+    "/compact": {
+      help: "压缩历史（摘要+按体积保留尾部，超过阈值也会自动触发）",
+      run: async (): Promise<CommandOutcome> => {
+        await doCompact();
+        return "handled";
+      },
+    },
+    "/provider": {
+      help: "[名称] 切换协议通道（无参查看）",
+      run: (arg) => {
+        if (!arg) {
+          console.log(`可用: ${Object.keys(providers).join(", ")} | 当前: ${currentName}`);
+        } else if (providers[arg]) {
+          currentName = arg;
+          console.log(`(已切换到 ${arg})`);
+        } else {
+          console.log(`没有这个 provider，可用: ${Object.keys(providers).join(", ")}`);
+        }
+        return "handled";
+      },
+    },
+    "/tools": {
+      help: "[on|off] 工具列表 / agent 模式开关",
+      run: (arg) => {
+        if (!tools) {
+          console.log("(本次启动没有注册任何工具)");
+          return "handled";
+        }
+        if (arg === "on" || arg === "off") {
+          agentMode = arg === "on";
+          console.log(`（agent 模式已${agentMode ? "开启" : "关闭"}——${agentMode ? "工具循环" : "纯聊天流式"}）`);
+          return "handled";
+        }
+        console.log(`已注册工具（agent 模式：${agentMode ? "开" : "关"}）:`);
+        for (const t of tools.list()) {
+          console.log(`  ${t.name}${t.needsApproval ? " 🔒" : ""} —— ${t.description}`);
+        }
+        console.log("（🔒 = 写类工具，执行前需要确认）");
+        return "handled";
+      },
+    },
+    "/plan": {
+      help: "<任务> 计划模式（只读侦察→批准→执行）",
+      run: (arg) => {
+        if (!tools) {
+          console.log("(本次启动没有注册任何工具，计划模式不可用)");
+          return "handled";
+        }
+        if (!arg) {
+          console.log("用法：/plan <任务描述> —— 模型先用只读工具摸清情况并给出计划，你批准后才动手");
+          return "handled";
+        }
+        planTask = arg;
+        return "fallthrough"; // 任务描述落到下面的对话段，像普通输入一样跑
+      },
+    },
+    "/help": {
+      help: "查看本列表",
+      run: () => {
+        console.log(Object.entries(commands).map(([name, c]) => `${name} ${c.help}`).join(" | "));
+        return "handled";
+      },
+    },
+  };
+
   console.log(`mini-coder 就绪 —— 当前 provider: ${currentName}，输入 /help 查看命令`);
 
   while (true) {
     const line = (await rl.question("> ")).trim();
     if (!line) continue;
 
-    // ---- 内建命令（硬编码分发；/provider 无参查看、带参热切换）----
-    if (line === "/exit") {
-      rl.close();
-      console.log("(再见)");
-      return;
-    }
-    if (line === "/clear") {
-      messages.length = 0; // "失忆"的本质：客户端清空自己的数组（M1 的核心观察）
-      console.log("(历史已清空)");
-      continue;
-    }
-    if (line === "/usage") {
-      console.log(
-        `本会话累计 ${usageCount} 轮有账：输入 ${totalUsage.inputTokens} + 输出 ${totalUsage.outputTokens} tokens；` +
-          `当前历史估算 ≈${estimateHistory(messages)} tokens（两本账：真实账看端点脸色，估算账自己算，压缩决策只认后者）` +
-          (usageCount === 0 ? "（流式下 MiMo 不回 usage，数字为空属正常，见 NOTES）" : ""),
-      );
-      continue;
-    }
-    if (line === "/compact") {
-      await doCompact();
-      continue;
-    }
-    if (line === "/provider") {
-      console.log(`可用: ${Object.keys(providers).join(", ")} | 当前: ${currentName}`);
-      continue;
-    }
-    if (line.startsWith("/provider ")) {
-      const name = line.slice("/provider ".length).trim();
-      if (providers[name]) {
-        currentName = name;
-        console.log(`(已切换到 ${name})`);
-      } else {
-        console.log(`没有这个 provider，可用: ${Object.keys(providers).join(", ")}`);
-      }
-      continue;
-    }
-    if (line === "/tools" || line.startsWith("/tools ")) {
-      if (!tools) {
-        console.log("(本次启动没有注册任何工具)");
+    // ---- 命令分发：查表，三种去向见上面的注释 ----
+    if (line.startsWith("/")) {
+      const sp = line.indexOf(" ");
+      const name = sp === -1 ? line : line.slice(0, sp);
+      const arg = sp === -1 ? "" : line.slice(sp + 1).trim();
+      const command = commands[name];
+      if (!command) {
+        console.log(`未知命令 ${name}，/help 查看可用命令`);
         continue;
       }
-      const arg = line.slice("/tools".length).trim();
-      if (arg === "on" || arg === "off") {
-        agentMode = arg === "on";
-        console.log(`（agent 模式已${agentMode ? "开启" : "关闭"}——${agentMode ? "工具循环" : "纯聊天流式"}）`);
-        continue;
-      }
-      console.log(`已注册工具（agent 模式：${agentMode ? "开" : "关"}）:`);
-      for (const t of tools.list()) {
-        console.log(`  ${t.name}${t.needsApproval ? " 🔒" : ""} —— ${t.description}`);
-      }
-      console.log("（🔒 = 写类工具，执行前需要确认）");
-      continue;
-    }
-    // 计划模式（阶段 3）：参数校验在这里，执行落在底部的执行段，
-    // 与普通输入共用同一套 try/catch/finally（错误与中断语义不另起炉灶）
-    const isPlan = line === "/plan" || line.startsWith("/plan ");
-    const planTask = isPlan ? line.slice("/plan".length).trim() : "";
-    if (isPlan && !tools) {
-      console.log("(本次启动没有注册任何工具，计划模式不可用)");
-      continue;
-    }
-    if (isPlan && !planTask) {
-      console.log("用法：/plan <任务描述> —— 模型先用只读工具摸清情况并给出计划，你批准后才动手");
-      continue;
-    }
-    if (line === "/help") {
-      console.log(
-        "/exit 退出 | /clear 清空历史 | /usage 查看累计 token 与历史估算 | /compact 压缩历史（摘要+按体积保留尾部，超过阈值也会自动触发） | /provider [名称] 切换协议通道 | /tools [on|off] 工具列表/agent 模式开关 | /plan <任务> 计划模式（只读侦察→批准→执行）",
-      );
-      continue;
-    }
-    if (line.startsWith("/") && !isPlan) {
-      console.log(`未知命令 ${line.split(" ")[0]}，/help 查看可用命令`);
-      continue;
+      const outcome = await command.run(arg);
+      if (outcome === "exit") return;
+      if (outcome === "handled") continue;
+      // fallthrough（/plan）：planTask 已就位，落到下面的对话段
     }
 
     // ---- 正常对话（纯聊天 / agent / 计划模式共用同一份 messages 历史）----
+    const isPlan = planTask !== null;
+    const turnInput = planTask ?? line;
+    planTask = null;
     const provider = providers[currentName]!;
-    messages.push({ role: "user", content: isPlan ? planTask : line });
+    messages.push({ role: "user", content: turnInput });
 
     rl.pause(); // 暂停输入监听：流式输出期间不能让按键回显打碎画面
     // 切回"熟模式"：让 Ctrl+C 重新成为进程级信号（生模式下它是滞留缓冲区的 \x03）
