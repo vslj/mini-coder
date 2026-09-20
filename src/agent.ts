@@ -112,7 +112,17 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<AgentTurnRes
         // 然后提前结束回合：进度保留，"继续"能接上。
         const tool = tools.get(call.name);
         if (tool?.needsApproval && gate) {
-          const preview = tool.preview?.(call.args);
+          // 预览生成失败不算错误（Tool 接口的承诺）——edit 的 preview 内部要做
+          // 替换计算，old_string 匹配不上就会抛错。阶段 4 实验①实测：这里漏包
+          // try/catch 时，同款错误从 run 路径抛出会被 execute 包装成 {error} 喂回
+          // 自愈，从 preview 路径抛出却炸掉整个回合（真错误回滚 + 提问被吞）。
+          // 兜住按"无预览"处理，真正的错误留给下面的 execute 去包装喂回。
+          let preview: string | undefined;
+          try {
+            preview = tool.preview?.(call.args);
+          } catch {
+            preview = undefined;
+          }
           const decision = await gate.check(call.name, preview);
           if (decision === "cancel") {
             for (let j = i; j < calls.length; j++) {

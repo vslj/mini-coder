@@ -96,7 +96,10 @@ export function createOpenAIProvider(cfg: AppConfig): Provider {
       };
       const resp = await withRetry(() => fetchResponse(body, opts?.signal), 3, "chat");
 
-      const data = (await resp.json()) as {
+      // 响应体阶段的网络错误不会经过 fetchResponse 的 catch——那是"拿到响应
+      // 之后"的事，连接可能在传输中途断开（undici 抛 TypeError: terminated）。
+      // 阶段 4 实验①实测：漏包时错误裸抛，绕过重试层，repl 走"意外错误"分支。
+      let data: {
         choices?: {
           message?: {
             content?: string;
@@ -107,6 +110,12 @@ export function createOpenAIProvider(cfg: AppConfig): Provider {
         }[];
         usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
+      try {
+        data = (await resp.json()) as typeof data;
+      } catch (e) {
+        if (opts?.signal?.aborted) throw e; // Ctrl+C 中断不是网络错误，原样放行
+        throw new ProviderError("network", `网络错误: 响应体读取中断: ${e instanceof Error ? e.message : e}`);
+      }
 
       // noUncheckedIndexedAccess：choices[0] 可能不存在，防御性处理协议差异
       const choice = data.choices?.[0];
@@ -157,51 +166,64 @@ export function createOpenAIProvider(cfg: AppConfig): Provider {
       const resp = await withRetry(() => fetchResponse(body, opts?.signal), 3, "chatStream");
       if (!resp.body) throw new ProviderError("protocol", "响应没有 body，无法流式读取");
 
-      // 边流边拼最终结果；每收到一块就交给回调
+      // 边流边拼最终结果；每收到一块就交给回调。
+      // 流消费阶段的断连（连接中途死亡）同样不在 fetchResponse 的罩子里，
+      // 这里补同一层 network 包装；已分类的 protocol 错误与 Ctrl+C 原样放行。
+      // 注意这层包装在 withRetry 之外：流已经开始画就不能重试（会从头再来，
+      // 回调已经画过一半了）——只能把错误包装得可读、可分类。
       let content = "";
       let reasoning = "";
       let stopReason: StopReason = "other";
       let usage: ChatResult["usage"];
 
-      for await (const line of sseLines(resp.body)) {
-        // OpenAI 流只有一种有效行：data: {...}。最后一条是字面量 data: [DONE]
-        if (!line.startsWith("data:")) continue;
-        const payload = line.slice(5).trim();
-        if (payload === "[DONE]") break; // 某些网关不发 [DONE]，流自然结束也能兜底
+      try {
+        for await (const line of sseLines(resp.body)) {
+          // OpenAI 流只有一种有效行：data: {...}。最后一条是字面量 data: [DONE]
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (payload === "[DONE]") break; // 某些网关不发 [DONE]，流自然结束也能兜底
 
-        // 防御协议差异：坏行不该让整个进程崩掉，报成 protocol 错（这类错不重试）
-        let chunk: unknown;
-        try {
-          chunk = JSON.parse(payload);
-        } catch {
-          throw new ProviderError("protocol", `流中出现无法解析的 data 行: ${payload.slice(0, 200)}`);
-        }
+          // 防御协议差异：坏行不该让整个进程崩掉，报成 protocol 错（这类错不重试）
+          let chunk: unknown;
+          try {
+            chunk = JSON.parse(payload);
+          } catch {
+            throw new ProviderError("protocol", `流中出现无法解析的 data 行: ${payload.slice(0, 200)}`);
+          }
 
-        const typed = chunk as {
-          choices?: { delta?: { content?: string; reasoning_content?: string }; finish_reason?: string | null }[];
-          usage?: { prompt_tokens?: number; completion_tokens?: number };
-        };
+          const typed = chunk as {
+            choices?: { delta?: { content?: string; reasoning_content?: string }; finish_reason?: string | null }[];
+            usage?: { prompt_tokens?: number; completion_tokens?: number };
+          };
 
-        const choice = typed.choices?.[0];
-        if (!choice) continue; // 纯 usage 的收尾 chunk 没有 choices，跳过即可
+          const choice = typed.choices?.[0];
+          if (!choice) continue; // 纯 usage 的收尾 chunk 没有 choices，跳过即可
 
-        const delta = choice.delta;
-        if (delta?.reasoning_content) {
-          reasoning += delta.reasoning_content;
-          onEvent({ type: "reasoning", text: delta.reasoning_content });
+          const delta = choice.delta;
+          if (delta?.reasoning_content) {
+            reasoning += delta.reasoning_content;
+            onEvent({ type: "reasoning", text: delta.reasoning_content });
+          }
+          if (delta?.content) {
+            content += delta.content;
+            onEvent({ type: "text", text: delta.content });
+          }
+          if (choice.finish_reason) {
+            stopReason = normalizeStop(choice.finish_reason);
+            onEvent({ type: "done", stopReason });
+          }
+          if (typed.usage?.prompt_tokens !== undefined && typed.usage.completion_tokens !== undefined) {
+            usage = { inputTokens: typed.usage.prompt_tokens, outputTokens: typed.usage.completion_tokens };
+            onEvent({ type: "usage", usage });
+          }
         }
-        if (delta?.content) {
-          content += delta.content;
-          onEvent({ type: "text", text: delta.content });
-        }
-        if (choice.finish_reason) {
-          stopReason = normalizeStop(choice.finish_reason);
-          onEvent({ type: "done", stopReason });
-        }
-        if (typed.usage?.prompt_tokens !== undefined && typed.usage.completion_tokens !== undefined) {
-          usage = { inputTokens: typed.usage.prompt_tokens, outputTokens: typed.usage.completion_tokens };
-          onEvent({ type: "usage", usage });
-        }
+      } catch (e) {
+        if (opts?.signal?.aborted) throw e; // Ctrl+C 原样放行
+        if (e instanceof ProviderError) throw e; // protocol 等已分类的错误原样放行
+        throw new ProviderError(
+          "network",
+          `网络错误: 流式响应中途断开: ${e instanceof Error ? e.message : e}`,
+        );
       }
 
       const result: ChatResult = { content, stopReason };

@@ -14,6 +14,13 @@
  */
 
 import * as readline from "node:readline/promises";
+import {
+  COMPACT_THRESHOLD,
+  KEEP_TAIL_TOKEN_CAP,
+  buildSummaryMessage,
+  compactMessages,
+  estimateHistory,
+} from "./compact.js";
 import { runAgentTurn, type AgentTurnResult } from "./agent.js";
 import { createInteractiveGate, type PermissionGate } from "./permissions.js";
 import { createRenderer } from "./render.js";
@@ -97,6 +104,39 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
   const renderer = createRenderer();
 
   /**
+   * 压缩历史并改写 messages（阶段 4）。compactMessages 不碰传入数组、
+   * 失败返回 null / 抛错时历史原封不动，所以这里不需要回滚逻辑——
+   * "替换"这个动作只发生在确认拿到摘要之后。
+   */
+  const doCompact = async (): Promise<void> => {
+    console.log(`${DIM}〔压缩中——正在请求模型总结旧历史……〕${RESET}`);
+    try {
+      const result = await compactMessages(messages, providers[currentName]!);
+      if (!result) {
+        console.log("（历史太短，没有值得压缩的回合——保持原样）");
+        return;
+      }
+      messages.length = 0;
+      messages.push(buildSummaryMessage(result.summary), ...result.kept);
+      console.log(
+        `〔历史已压缩：被替换部分 ≈${result.beforeTokens} → 摘要+保留段 ≈${result.afterTokens} tokens；` +
+          `保留段 ≈${result.keptTokens}（尾部按体积封顶 ${KEEP_TAIL_TOKEN_CAP}，最后一个回合无论如何保住），` +
+          `正在进行的任务可以直接说"继续"〕`,
+      );
+    } catch (e) {
+      console.error(`〔压缩失败：${e instanceof Error ? e.message : e}——历史保持原样〕`);
+    }
+  };
+
+  /** 自动压缩检查：每回合结束后跑一次，估算账超过阈值才动真格。 */
+  const maybeAutoCompact = async (): Promise<void> => {
+    const est = estimateHistory(messages);
+    if (est <= COMPACT_THRESHOLD) return;
+    console.log(`${DIM}〔历史估算 ≈${est} tokens，超过阈值 ${COMPACT_THRESHOLD}——自动压缩〕${RESET}`);
+    await doCompact();
+  };
+
+  /**
    * 跑一个 agent 回合并负责"人看的部分"：画工具活动、累计 usage、
    * 按停止原因收尾。agent 模式与计划模式的回合都走这一个入口。
    */
@@ -136,6 +176,9 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
         `[已达 ${result.rounds} 轮上限，强制停止——模型可能在工具调用里打转，试试换个问法或 /clear]`,
       );
     }
+    // 回合收尾顺手查一次水位：肥历史是文件任务的常态（实验①：读一个大文件
+    // 就 +1 万 tokens），等用户自己想起来 /compact 就晚了
+    await maybeAutoCompact();
     return result;
   };
 
@@ -158,9 +201,14 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
     }
     if (line === "/usage") {
       console.log(
-        `本会话累计 ${usageCount} 轮有账：输入 ${totalUsage.inputTokens} + 输出 ${totalUsage.outputTokens} tokens` +
+        `本会话累计 ${usageCount} 轮有账：输入 ${totalUsage.inputTokens} + 输出 ${totalUsage.outputTokens} tokens；` +
+          `当前历史估算 ≈${estimateHistory(messages)} tokens（两本账：真实账看端点脸色，估算账自己算，压缩决策只认后者）` +
           (usageCount === 0 ? "（流式下 MiMo 不回 usage，数字为空属正常，见 NOTES）" : ""),
       );
+      continue;
+    }
+    if (line === "/compact") {
+      await doCompact();
       continue;
     }
     if (line === "/provider") {
@@ -209,7 +257,7 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
     }
     if (line === "/help") {
       console.log(
-        "/exit 退出 | /clear 清空历史 | /usage 查看累计 token | /provider [名称] 切换协议通道 | /tools [on|off] 工具列表/agent 模式开关 | /plan <任务> 计划模式（只读侦察→批准→执行）",
+        "/exit 退出 | /clear 清空历史 | /usage 查看累计 token 与历史估算 | /compact 压缩历史（摘要+按体积保留尾部，超过阈值也会自动触发） | /provider [名称] 切换协议通道 | /tools [on|off] 工具列表/agent 模式开关 | /plan <任务> 计划模式（只读侦察→批准→执行）",
       );
       continue;
     }
@@ -281,6 +329,7 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
         );
         // 入历史的 assistant 消息只带 content（reasoning 是瞬时字段，类型上就带不进历史）
         messages.push({ role: "assistant", content: result.content });
+        await maybeAutoCompact(); // 纯聊天也会肥（长回答全文在历史里），同一把尺子量
       }
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") {
@@ -299,7 +348,13 @@ export async function startRepl({ providers, initial, tools, system }: ReplOptio
       } else if (e instanceof Error && e.name === "ProviderError") {
         const err = e as Error & { kind?: string; status?: number };
         console.error(`\n[provider 错误 ${err.kind ?? "?"}${err.status ? ` HTTP ${err.status}` : ""}] ${err.message}`);
-        messages.pop(); // 请求失败，撤回提问，避免下次带着孤立 user 消息
+        if (partial && !isPlan && !(agentMode && tools)) {
+          // 纯聊天流中断在半截（网络错误包装后走到了这里而不是"意外错误"）：
+          // 半截回答入历史而不是丢弃——同"中断不丢上下文"哲学，说"继续"能接着写
+          messages.push({ role: "assistant", content: `${partial}\n[回答因网络错误中断]` });
+        } else {
+          messages.pop(); // 没有任何产出：撤回提问，避免下次带着孤立 user 消息
+        }
       } else {
         console.error(`\n[意外错误] ${e instanceof Error ? e.stack ?? e.message : e}`);
         messages.pop();

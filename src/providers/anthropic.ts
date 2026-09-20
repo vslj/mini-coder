@@ -130,7 +130,9 @@ export function createAnthropicProvider(cfg: AppConfig): Provider {
       };
       const resp = await withRetry(() => fetchResponse(body, opts?.signal), 3, "chat");
 
-      const data = (await resp.json()) as {
+      // 响应体阶段的网络错误同样不在 fetchResponse 的罩子里（与 openai.ts 同款，
+      // 阶段 4 实验①实测的盲区）：补同一层 network 包装
+      let data: {
         content?: {
           type: string;
           text?: string;
@@ -142,6 +144,12 @@ export function createAnthropicProvider(cfg: AppConfig): Provider {
         stop_reason?: string;
         usage?: { input_tokens?: number; output_tokens?: number };
       };
+      try {
+        data = (await resp.json()) as typeof data;
+      } catch (e) {
+        if (opts?.signal?.aborted) throw e; // Ctrl+C 中断不是网络错误，原样放行
+        throw new ProviderError("network", `网络错误: 响应体读取中断: ${e instanceof Error ? e.message : e}`);
+      }
       if (!Array.isArray(data.content)) {
         throw new ProviderError("protocol", `响应缺少 content 数组: ${JSON.stringify(data).slice(0, 300)}`);
       }
@@ -188,61 +196,72 @@ export function createAnthropicProvider(cfg: AppConfig): Provider {
       let stopReason: StopReason = "other";
       let usage: ChatResult["usage"];
 
-      for await (const line of sseLines(resp.body)) {
-        // Anthropic 流是 event: + data: 成对出现；data.type 自带事件名，
-        // 所以 event: 行可以不解析（读它只是教学演示两种流的形态差异）
-        if (line.startsWith("event:")) continue;
-        if (!line.startsWith("data:")) continue;
-        const payload = line.slice(5).trim();
-        if (!payload) continue;
+      // 流消费阶段的断连补 network 包装（与 openai.ts 同款）；已分类的
+      // protocol 错误与 Ctrl+C 原样放行。在 withRetry 之外：流已开始不能重试。
+      try {
+        for await (const line of sseLines(resp.body)) {
+          // Anthropic 流是 event: + data: 成对出现；data.type 自带事件名，
+          // 所以 event: 行可以不解析（读它只是教学演示两种流的形态差异）
+          if (line.startsWith("event:")) continue;
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
 
-        let data: {
-          type: string;
-          message?: { usage?: { input_tokens?: number } };
-          delta?: { type?: string; text?: string; thinking?: string; stop_reason?: string };
-          usage?: { output_tokens?: number };
-        };
-        try {
-          data = JSON.parse(payload);
-        } catch {
-          throw new ProviderError("protocol", `流中出现无法解析的 data 行: ${payload.slice(0, 200)}`);
-        }
+          let data: {
+            type: string;
+            message?: { usage?: { input_tokens?: number } };
+            delta?: { type?: string; text?: string; thinking?: string; stop_reason?: string };
+            usage?: { output_tokens?: number };
+          };
+          try {
+            data = JSON.parse(payload);
+          } catch {
+            throw new ProviderError("protocol", `流中出现无法解析的 data 行: ${payload.slice(0, 200)}`);
+          }
 
-        switch (data.type) {
-          case "message_start":
-            // 输入 token 在流的开头就到（OpenAI 协议没有这个能力）；
-            // 但 MiMo 这里给的是 1（不可信），真实账目在 message_delta
-            if (data.message?.usage?.input_tokens !== undefined) {
-              usage = { inputTokens: data.message.usage.input_tokens, outputTokens: 0 };
-            }
-            break;
-          case "content_block_delta":
-            if (data.delta?.type === "text_delta" && data.delta.text) {
-              content += data.delta.text;
-              onEvent({ type: "text", text: data.delta.text });
-            } else if (data.delta?.type === "thinking_delta" && data.delta.thinking) {
-              reasoning += data.delta.thinking;
-              onEvent({ type: "reasoning", text: data.delta.thinking });
-            }
-            // 其他 delta（signature_delta 等）跳过不炸
-            break;
-          case "message_delta":
-            if (data.delta?.stop_reason) {
-              stopReason = normalizeStop(data.delta.stop_reason);
-            }
-            if (data.usage?.output_tokens !== undefined) {
-              usage = {
-                inputTokens: usage?.inputTokens ?? 0,
-                outputTokens: data.usage.output_tokens,
-              };
-              onEvent({ type: "usage", usage });
-            }
-            break;
-          case "message_stop":
-            onEvent({ type: "done", stopReason });
-            break;
-          // ping / content_block_start / content_block_stop 等一律忽略
+          switch (data.type) {
+            case "message_start":
+              // 输入 token 在流的开头就到（OpenAI 协议没有这个能力）；
+              // 但 MiMo 这里给的是 1（不可信），真实账目在 message_delta
+              if (data.message?.usage?.input_tokens !== undefined) {
+                usage = { inputTokens: data.message.usage.input_tokens, outputTokens: 0 };
+              }
+              break;
+            case "content_block_delta":
+              if (data.delta?.type === "text_delta" && data.delta.text) {
+                content += data.delta.text;
+                onEvent({ type: "text", text: data.delta.text });
+              } else if (data.delta?.type === "thinking_delta" && data.delta.thinking) {
+                reasoning += data.delta.thinking;
+                onEvent({ type: "reasoning", text: data.delta.thinking });
+              }
+              // 其他 delta（signature_delta 等）跳过不炸
+              break;
+            case "message_delta":
+              if (data.delta?.stop_reason) {
+                stopReason = normalizeStop(data.delta.stop_reason);
+              }
+              if (data.usage?.output_tokens !== undefined) {
+                usage = {
+                  inputTokens: usage?.inputTokens ?? 0,
+                  outputTokens: data.usage.output_tokens,
+                };
+                onEvent({ type: "usage", usage });
+              }
+              break;
+            case "message_stop":
+              onEvent({ type: "done", stopReason });
+              break;
+            // ping / content_block_start / content_block_stop 等一律忽略
+          }
         }
+      } catch (e) {
+        if (opts?.signal?.aborted) throw e; // Ctrl+C 原样放行
+        if (e instanceof ProviderError) throw e; // protocol 等已分类的错误原样放行
+        throw new ProviderError(
+          "network",
+          `网络错误: 流式响应中途断开: ${e instanceof Error ? e.message : e}`,
+        );
       }
 
       const result: ChatResult = { content, stopReason };
